@@ -1,0 +1,28 @@
+{
+  "name": "sentinel-runtime",
+  "version": "0.1.0",
+  "description": "Deterministic Runtime Behavioral Security & Active Containment Engine for Sentinel Platform",
+  "main": "src/index.js",
+  "bin": {
+    "sentinel-runtime": "./bin/sentinel-runtime.js"
+  },
+  "scripts": {
+    "test": "node --test test/**/*.test.js",
+    "lab:proc": "node labs/01-proc-injection/run-lab.js",
+    "lab:exfil": "node labs/02-data-exfil/run-lab.js"
+  },
+  "keywords": [
+    "sentinel",
+    "runtime-security",
+    "ebpf",
+    "tetragon-events",
+    "behavioral-analysis",
+    "active-containment",
+    "process-supervision"
+  ],
+  "author": "javier20dev25",
+  "license": "BUSL-1.1",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
