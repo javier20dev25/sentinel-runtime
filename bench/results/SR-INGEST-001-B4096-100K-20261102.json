@@ -1,0 +1,97 @@
+{
+  "benchmark_id": "SR-INGEST-001",
+  "target_revision": "fb4c5d638810e6a63cd35f68c50f5740e8db8d75",
+  "working_tree_note": "Commit SHA identifies HEAD; source_hashes seal the measured working-tree files, which may include uncommitted implementation changes.",
+  "runtime": {
+    "node": "v24.20.0",
+    "platform": "win32",
+    "architecture": "x64",
+    "os_release": "10.0.26200",
+    "cpu_model": "AMD Ryzen 3 7320U with Radeon Graphics         ",
+    "logical_cpu_count": 8
+  },
+  "scenario": {
+    "name": "Tetragon JSONL offline ingest with SQLite evidence persistence",
+    "events": 100000,
+    "warmup_events": 1000,
+    "repetitions": 1,
+    "input_bytes": 26684000,
+    "input_sha256": "11c9f95ab38d161ed57269947e8361a01175d3ac6915dbb35f2fb3100af8ec89",
+    "chunk_bytes": 65536,
+    "sqlite": "file-backed; journal_mode=WAL; synchronous=FULL; foreign_keys=ON",
+    "evidence_batch_size": 4096,
+    "workload_profile": "exact /usr/bin/node path; every event expected NORMAL",
+    "included_stages": [
+      "JSONL framing",
+      "duplicate-key scan",
+      "JSON parse",
+      "Tetragon exec normalization",
+      "source-key hashing",
+      "bounded correlation",
+      "bounded-batch SQLite commits",
+      "post-run hash-chain verification"
+    ],
+    "excluded": [
+      "corpus generation",
+      "sensor collection/eBPF",
+      "gRPC transport",
+      "kernel event production",
+      "cross-process taint",
+      "active enforcement"
+    ],
+    "llm_token_metrics": "not applicable to deterministic non-LLM benchmark",
+    "prompt_hashes": "not applicable"
+  },
+  "source_hashes": {
+    "src/engine.js": "2b7b9da02fd04282223f0bd7cb459c680804c0f97b21ce0efbb3df8440cba5b1",
+    "src/profiler.js": "bb221b2ac3b5a371d70e971f1cbbd234315ce53f7ca38a55690b984334f1e1cd",
+    "src/evidence.js": "c8949459016221dc822cb461b3d74a7a7772911ed467e81f9988b782e795aaad",
+    "src/types.js": "801be363dd62dbf03c523b5675f5bd65e6b7f17c040c598619cd570deb98583d",
+    "src/ingest/jsonl.js": "7ea9c4c73b7a08a81fd120f98602c5d54ebb6707540c66a1d331bb1a534ff6b3",
+    "src/adapters/tetragon-json.js": "af2d480eab1cf9362ac9b9d4857773ca2b6544fe48436c818b1f6aad830d5cf0",
+    "src/contracts/canonical-json.js": "74e7e6d7b8749a0b3cdbb07e8719c9e127980461e6b675ab543b46075460d705",
+    "src/contracts/event-keys.js": "dca6666d8408ef1f52c2baf35ae4574913c8ea048028d1967c507f9306b325a7",
+    "schemas/runtime-event-v2.schema.json": "ebf1349ef7b3412858030ac9ecb9cfbb31bae8795307ae0e8bdeb43ca6bdec91",
+    "package.json": "6f52cab7ec4910efa083e9439c19af3561ddd437b7a0ce3b132c818d7d786fef",
+    "package-lock.json": "a71f033b72d43cd490f207623b3f6c7adbf8c75cc99a7c4bbcc7485028fc11ff",
+    "bench/runtime-ingest.js": "0d23ac80cf73ba89c6b29d3973d6a41b06bc3a76a718bb68c06b3a5107931742"
+  },
+  "runs": [
+    {
+      "counts": {
+        "frames": 100000,
+        "normalized": 100000,
+        "normal": 100000,
+        "unassessed": 0,
+        "non_normal": 0,
+        "unsupported": 0,
+        "rejected": 0,
+        "ledger_records": 100000
+      },
+      "elapsed_ms": 26499.88,
+      "events_per_second": 3773.6,
+      "stage_timings": {
+        "framing_ms": 129.68,
+        "parse_ms": 1362.45,
+        "normalize_ms": 2588.45,
+        "engine_ms": 3521.55,
+        "ledger_commit_ms": 18789.63
+      },
+      "ledger_timings": {
+        "canonicalization_ms": 4171.11,
+        "chain_hashing_ms": 874.03,
+        "sqlite_insert_ms": 4766.03,
+        "sqlite_commit_ms": 7648.79
+      },
+      "verify_ms": 6184.41,
+      "head_hash": "f4f4e50e4e3769d81047d10ebcae1b9ce9ce3de6837adf22f81df326aeb7e629"
+    }
+  ],
+  "summary": {
+    "median_events_per_second": 3773.6,
+    "min_events_per_second": 3773.6,
+    "max_events_per_second": 3773.6,
+    "median_verify_ms": 6184.41
+  },
+  "manifest_sha256": "bb853f2ee7a82b81cda41f586d96d9d3863c668ac0ae434ac1cbacebc7af9922"
+}

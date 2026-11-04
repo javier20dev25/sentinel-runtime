@@ -1,0 +1,44 @@
+[Unit]
+Description=Sentinel Runtime observe-only Tetragon collector
+Wants=network-online.target
+Requires=sentinel-runtime-proxy.service
+After=network-online.target sentinel-runtime-proxy.service
+StartLimitIntervalSec=5min
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=sentinel-runtime
+Group=sentinel-runtime
+EnvironmentFile=/etc/sentinel-runtime/sentinel-runtime.env
+WorkingDirectory=/opt/sentinel-runtime
+ExecStart=/usr/bin/node /opt/sentinel-runtime/bin/sentinel-runtime.js collect-tetragon --address ${SENTINEL_RUNTIME_ADDRESS} --host-id ${SENTINEL_RUNTIME_HOST_ID} --boot-id-file /proc/sys/kernel/random/boot_id --db /var/lib/sentinel-runtime/runtime.sqlite
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+UMask=0077
+StateDirectory=sentinel-runtime
+StateDirectoryMode=0700
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

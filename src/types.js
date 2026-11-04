@@ -6,40 +6,55 @@
 const EventType = Object.freeze({
   PROCESS_EXEC: 'PROCESS_EXEC',
   PROCESS_EXIT: 'PROCESS_EXIT',
+  FILE_OPEN_ATTEMPT: 'FILE_OPEN_ATTEMPT',
+  FILE_OPEN_RESULT: 'FILE_OPEN_RESULT',
   FILE_READ: 'FILE_READ',
   FILE_WRITE: 'FILE_WRITE',
   NETWORK_CONNECT: 'NETWORK_CONNECT',
+  NETWORK_CONNECT_ATTEMPT: 'NETWORK_CONNECT_ATTEMPT',
+  NETWORK_CONNECT_RESULT: 'NETWORK_CONNECT_RESULT',
   NETWORK_SEND: 'NETWORK_SEND',
-  CAPABILITY_CHANGE: 'CAPABILITY_CHANGE',
-  IDENTITY_ACCESS: 'IDENTITY_ACCESS'
+  NETWORK_SEND_ATTEMPT: 'NETWORK_SEND_ATTEMPT',
+  NETWORK_SEND_RESULT: 'NETWORK_SEND_RESULT',
+  CAPABILITY_CHECK: 'CAPABILITY_CHECK',
+  // Deprecated in-process compatibility alias. V2 uses CAPABILITY_CHECK.
+  CAPABILITY_CHANGE: 'CAPABILITY_CHECK',
+  IDENTITY_ACCESS: 'IDENTITY_ACCESS',
+  IDENTITY_CHANGE: 'IDENTITY_CHANGE',
+  EVENT_LOSS: 'EVENT_LOSS',
+  SENSOR_HEALTH: 'SENSOR_HEALTH'
 });
 
 /**
- * Niveles de Contención y Respuesta Graduada
+ * Severity labels only. The runtime currently operates observe-only.
  */
 const ThreatLevel = Object.freeze({
+  UNASSESSED: 0,         // Telemetry exists, but no policy/evidence supports a baseline verdict
   NORMAL: 1,             // Nivel 1: Comportamiento dentro del baseline
-  ELEVATED_WATCH: 2,     // Nivel 2: Desviación menor, incrementar telemetría
-  SUSPICIOUS: 3,         // Nivel 3: Alerta y restricción parcial
-  CONFIRMED_VIOLATION: 4,// Nivel 4: Bloqueo activo del proceso / syscall
-  CRITICAL_BREACH: 5     // Nivel 5: Contención total de workload + revocación
+  ELEVATED_WATCH: 2,      // Señal que requiere más observación
+  SUSPICIOUS: 3,          // Evidencia sospechosa correlacionada; observe-only
+  CONFIRMED_VIOLATION: 4, // Severidad reservada; no ejecuta contención
+  CRITICAL_BREACH: 5      // Severidad reservada; no ejecuta revocación
 });
 
 /**
- * Acciones de Enforcement ejecutables
+ * Recommendations emitted by the observe-only runtime. These do not invoke OS enforcement.
  */
-const EnforcementAction = Object.freeze({
+const RecommendationAction = Object.freeze({
   RECORD_ONLY: 'RECORD_ONLY',
-  INCREASE_LOGGING: 'INCREASE_LOGGING',
-  BLOCK_SYSCALL: 'BLOCK_SYSCALL',
-  SUSPEND_PROCESS: 'SUSPEND_PROCESS',      // Reversible: SIGSTOP
-  TERMINATE_PROCESS: 'TERMINATE_PROCESS',  // No reversible: SIGKILL
-  ISOLATE_NETWORK: 'ISOLATE_NETWORK',      // Reversible: regla temporal de firewall
-  REVOKE_CREDENTIAL: 'REVOKE_CREDENTIAL'   // Solicitud a Sentinel Identity / Cloud
+  REQUEST_MORE_TELEMETRY: 'REQUEST_MORE_TELEMETRY'
+});
+
+// Deprecated API name retained for callers that imported the early 0.1.0 type.
+const EnforcementAction = Object.freeze({
+  RECORD_ONLY: RecommendationAction.RECORD_ONLY,
+  REQUEST_MORE_TELEMETRY: RecommendationAction.REQUEST_MORE_TELEMETRY,
+  INCREASE_LOGGING: RecommendationAction.REQUEST_MORE_TELEMETRY
 });
 
 module.exports = {
   EventType,
   ThreatLevel,
+  RecommendationAction,
   EnforcementAction
 };

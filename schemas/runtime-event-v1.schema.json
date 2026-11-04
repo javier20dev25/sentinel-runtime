@@ -1,0 +1,651 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sentinel.security/schemas/v1/runtime-event.schema.json",
+  "title": "SentinelRuntimeEventV1",
+  "description": "Hardened normative schema for Sentinel Runtime Event Contract v1 according to SPEC-EVENT-V1r2 and Phase 001A-R2",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "event_id",
+    "event_type",
+    "source_provider",
+    "source_event_type",
+    "host_id",
+    "boot_id",
+    "source_timestamp",
+    "observed_timestamp",
+    "sensor_version",
+    "process_identity",
+    "workload_context",
+    "payload",
+    "provenance",
+    "loss_metrics"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    },
+    "event_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "PROCESS_EXEC",
+        "PROCESS_EXIT",
+        "FILE_OPEN_ATTEMPT",
+        "FILE_OPEN_RESULT",
+        "FILE_READ",
+        "NETWORK_CONNECT_ATTEMPT",
+        "NETWORK_CONNECT_RESULT",
+        "NETWORK_SEND_ATTEMPT",
+        "NETWORK_SEND_RESULT",
+        "SOCKET_STATE_CHANGE",
+        "IDENTITY_CHANGE",
+        "CAPABILITY_CHANGE",
+        "EVENT_LOSS",
+        "SENSOR_HEALTH"
+      ]
+    },
+    "source_provider": {
+      "type": "string",
+      "enum": [
+        "tetragon",
+        "ebpf_custom",
+        "linux_audit",
+        "synthetic_lab",
+        "other_provider",
+        "unknown_source"
+      ]
+    },
+    "source_event_type": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "source_event_id": {
+      "type": ["string", "null"],
+      "maxLength": 128
+    },
+    "host_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "boot_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "source_timestamp": {
+      "$ref": "#/$defs/uint64"
+    },
+    "observed_timestamp": {
+      "$ref": "#/$defs/uint64"
+    },
+    "monotonic_timestamp": {
+      "oneOf": [
+        { "$ref": "#/$defs/uint64" },
+        { "type": "null" }
+      ]
+    },
+    "sensor_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "policy_id": {
+      "type": ["string", "null"],
+      "maxLength": 256
+    },
+    "policy_version": {
+      "type": ["string", "null"],
+      "maxLength": 256
+    },
+    "completeness": {
+      "type": "string",
+      "enum": ["COMPLETE", "DEGRADED", "INCOMPLETE"]
+    },
+    "process_identity": {
+      "type": "object",
+      "required": [
+        "exec_id",
+        "pid",
+        "tid",
+        "process_start_time",
+        "executable_path",
+        "uid",
+        "euid",
+        "process_namespace",
+        "identity_quality"
+      ],
+      "properties": {
+        "exec_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "parent_exec_id": {
+          "type": ["string", "null"],
+          "maxLength": 512
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "tid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "process_start_time": {
+          "$ref": "#/$defs/uint64"
+        },
+        "executable_path": {
+          "$ref": "#/$defs/linuxPath"
+        },
+        "executable_digest": {
+          "type": ["object", "null"],
+          "properties": {
+            "algorithm": { "type": "string", "enum": ["sha256", "sha512", "md5"] },
+            "hex": { "type": "string", "pattern": "^[0-9a-fA-F]+$" }
+          },
+          "required": ["algorithm", "hex"],
+          "additionalProperties": false
+        },
+        "uid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "euid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "process_namespace": {
+          "type": "object",
+          "required": ["pid_ns", "mnt_ns", "net_ns"],
+          "properties": {
+            "pid_ns": { "$ref": "#/$defs/uint64" },
+            "mnt_ns": { "$ref": "#/$defs/uint64" },
+            "net_ns": { "$ref": "#/$defs/uint64" }
+          },
+          "additionalProperties": false
+        },
+        "identity_quality": {
+          "type": "string",
+          "enum": ["VERIFIED_OPAQUE", "DEGRADED_FALLBACK", "PARTIAL_ORPHAN"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "workload_context": {
+      "type": "object",
+      "required": [
+        "workload_type",
+        "cgroup_id",
+        "mount_namespace",
+        "pid_namespace",
+        "network_namespace",
+        "workload_id"
+      ],
+      "properties": {
+        "workload_type": {
+          "type": "string",
+          "enum": ["HOST_PROCESS", "CONTAINER", "KUBERNETES_POD"]
+        },
+        "container_id": {
+          "type": ["string", "null"],
+          "maxLength": 128
+        },
+        "cgroup_id": {
+          "$ref": "#/$defs/uint64OrPath"
+        },
+        "mount_namespace": {
+          "$ref": "#/$defs/uint64"
+        },
+        "pid_namespace": {
+          "$ref": "#/$defs/uint64"
+        },
+        "network_namespace": {
+          "$ref": "#/$defs/uint64"
+        },
+        "workload_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "k8s_metadata": {
+          "type": ["object", "null"],
+          "maxProperties": 20,
+          "properties": {
+            "pod_name": { "type": "string", "maxLength": 253 },
+            "namespace": { "type": "string", "maxLength": 63 },
+            "container_name": { "type": "string", "maxLength": 63 },
+            "pod_uid": { "type": "string", "maxLength": 64 },
+            "labels": { "type": "object", "maxProperties": 64 }
+          },
+          "required": ["pod_name", "namespace", "container_name"],
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "workload_type": { "const": "HOST_PROCESS" } }
+          },
+          "then": {
+            "properties": { "container_id": { "type": "null" } }
+          }
+        }
+      ]
+    },
+    "payload": {
+      "type": "object"
+    },
+    "provenance": {
+      "type": "object",
+      "required": [
+        "sensor_id",
+        "transport_protocol",
+        "transport_authenticated",
+        "collector_id",
+        "ingest_timestamp",
+        "raw_payload_sha256"
+      ],
+      "properties": {
+        "sensor_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "transport_protocol": {
+          "type": "string",
+          "enum": ["UNIX_DOMAIN_SOCKET", "GRPC_TLS", "JSON_FILE_STREAM", "SYNTHETIC_MEMORY"]
+        },
+        "transport_authenticated": {
+          "type": "boolean"
+        },
+        "collector_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "ingest_timestamp": {
+          "$ref": "#/$defs/uint64"
+        },
+        "raw_payload_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "additionalProperties": false
+    },
+    "loss_metrics": {
+      "type": "object",
+      "required": [
+        "loss_ebpf_kernel",
+        "loss_tetragon_throttle",
+        "loss_grpc_transport",
+        "loss_log_rotation",
+        "loss_parser_reject",
+        "loss_runtime_queue",
+        "loss_storage_drop"
+      ],
+      "properties": {
+        "loss_ebpf_kernel": { "type": "integer", "minimum": 0 },
+        "loss_tetragon_throttle": { "type": "integer", "minimum": 0 },
+        "loss_grpc_transport": { "type": "integer", "minimum": 0 },
+        "loss_log_rotation": { "type": "integer", "minimum": 0 },
+        "loss_parser_reject": { "type": "integer", "minimum": 0 },
+        "loss_runtime_queue": { "type": "integer", "minimum": 0 },
+        "loss_storage_drop": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": { "properties": { "event_type": { "const": "PROCESS_EXEC" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["binary", "arguments"],
+            "properties": {
+              "binary": { "$ref": "#/$defs/linuxPath" },
+              "arguments": {
+                "type": "array",
+                "maxItems": 1024,
+                "items": { "type": "string", "maxLength": 131072 }
+              },
+              "env_sensitive": { "type": ["object", "null"] },
+              "working_dir": { "$ref": "#/$defs/linuxPath" }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "PROCESS_EXIT" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["exit_code"],
+            "properties": {
+              "exit_code": { "type": "integer" },
+              "signal": { "type": ["integer", "null"] }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "FILE_OPEN_ATTEMPT" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["path", "flags"],
+            "properties": {
+              "path": { "$ref": "#/$defs/linuxPath" },
+              "flags": {
+                "oneOf": [
+                  { "type": "integer" },
+                  { "type": "array", "items": { "type": "string" }, "maxItems": 64 }
+                ]
+              },
+              "mode": { "type": ["integer", "null"] }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "FILE_OPEN_RESULT" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["return_code"],
+            "properties": {
+              "fd": { "type": ["integer", "null"] },
+              "return_code": { "type": "integer" },
+              "errno": { "type": ["integer", "null"] }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "FILE_READ" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["bytes_read", "return_code"],
+            "properties": {
+              "fd": { "type": ["integer", "null"] },
+              "path": { "$ref": "#/$defs/linuxPath" },
+              "bytes_read": { "type": "integer", "minimum": 0 },
+              "return_code": { "type": "integer" },
+              "offset": {
+                "oneOf": [
+                  { "$ref": "#/$defs/uint64" },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "NETWORK_CONNECT_ATTEMPT" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["family", "destination_ip", "destination_port", "protocol"],
+            "properties": {
+              "family": { "type": "string", "enum": ["AF_INET", "AF_INET6", "AF_UNIX"] },
+              "destination_ip": { "type": "string", "minLength": 1, "maxLength": 255 },
+              "destination_port": { "type": "integer", "minimum": 0, "maximum": 65535 },
+              "protocol": {
+                "oneOf": [
+                  { "type": "string", "maxLength": 32 },
+                  { "type": "integer" }
+                ]
+              },
+              "socket_fd": { "type": ["integer", "null"] }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "NETWORK_CONNECT_RESULT" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["return_code"],
+            "properties": {
+              "socket_fd": { "type": ["integer", "null"] },
+              "return_code": { "type": "integer" },
+              "errno": { "type": ["integer", "null"] },
+              "socket_state": { "type": "string", "maxLength": 64 }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "NETWORK_SEND_ATTEMPT" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["bytes_requested"],
+            "properties": {
+              "socket_fd": { "type": ["integer", "null"] },
+              "destination_ip": { "type": "string", "maxLength": 255 },
+              "destination_port": { "type": "integer", "minimum": 0, "maximum": 65535 },
+              "bytes_requested": { "type": "integer", "minimum": 0 }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "NETWORK_SEND_RESULT" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["bytes_accepted_by_kernel", "return_code"],
+            "properties": {
+              "socket_fd": { "type": ["integer", "null"] },
+              "bytes_accepted_by_kernel": { "type": "integer", "minimum": 0 },
+              "return_code": { "type": "integer" },
+              "destination_ip": { "type": "string", "maxLength": 255 },
+              "destination_port": { "type": "integer", "minimum": 0, "maximum": 65535 },
+              "socket_state": { "type": "string", "maxLength": 64 },
+              "correlation_verdict": {
+                "type": "string",
+                "enum": [
+                  "OUTBOUND_ATTEMPT",
+                  "OUTBOUND_ACTIVITY_OBSERVED",
+                  "OUTBOUND_TRANSFER_CORRELATED",
+                  "SENSITIVE_ACCESS_AND_OUTBOUND_TRANSFER_CORRELATED",
+                  "SENSITIVE_DATA_EXFILTRATION_CONFIRMED"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "SOCKET_STATE_CHANGE" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["old_state", "new_state"],
+            "properties": {
+              "socket_fd": { "type": ["integer", "null"] },
+              "old_state": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "new_state": { "type": "string", "minLength": 1, "maxLength": 64 }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "IDENTITY_CHANGE" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["old_uid", "new_uid", "old_euid", "new_euid", "mechanism"],
+            "properties": {
+              "old_uid": { "type": "integer", "minimum": 0 },
+              "new_uid": { "type": "integer", "minimum": 0 },
+              "old_euid": { "type": "integer", "minimum": 0 },
+              "new_euid": { "type": "integer", "minimum": 0 },
+              "mechanism": { "type": "string", "minLength": 1, "maxLength": 64 }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "CAPABILITY_CHANGE" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["capability", "action"],
+            "properties": {
+              "capability": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "action": { "type": "string", "enum": ["ADDED", "REMOVED", "DROPPED"] },
+              "cap_value": {
+                "oneOf": [
+                  { "type": "integer" },
+                  { "type": "string", "maxLength": 32 }
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "EVENT_LOSS" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["loss_source", "dropped_count", "window_seconds", "scope"],
+            "properties": {
+              "loss_source": {
+                "type": "string",
+                "enum": [
+                  "ebpf_kernel",
+                  "tetragon_throttle",
+                  "grpc_transport",
+                  "log_rotation",
+                  "parser_reject",
+                  "runtime_queue",
+                  "storage_drop"
+                ]
+              },
+              "dropped_count": { "type": "integer", "minimum": 1 },
+              "window_seconds": { "type": "number", "minimum": 0 },
+              "scope": { "type": "string", "enum": ["GLOBAL", "CGROUP", "WORKLOAD"] },
+              "cgroup_path": { "type": ["string", "null"], "maxLength": 4096 }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "SENSOR_HEALTH" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["sensor_status", "uptime_seconds", "heartbeat_timestamp"],
+            "properties": {
+              "sensor_status": {
+                "type": "string",
+                "enum": ["HEALTHY", "DEGRADED", "RECOVERING", "UNAVAILABLE"]
+              },
+              "uptime_seconds": { "type": "integer", "minimum": 0 },
+              "heartbeat_timestamp": { "$ref": "#/$defs/uint64" },
+              "active_tracing_policies": {
+                "type": "array",
+                "maxItems": 256,
+                "items": { "type": "string", "maxLength": 128 }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "uint64": {
+      "description": "64-bit unsigned integer represented safely as a canonical decimal string (0 to 18446744073709551615 without leading zeros) or safe integer (0 to 2^53 - 1)",
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      ]
+    },
+    "uint64OrPath": {
+      "description": "64-bit uint64 or cgroup filesystem path",
+      "oneOf": [
+        { "$ref": "#/$defs/uint64" },
+        { "type": "string", "pattern": "^/.*", "maxLength": 4096 }
+      ]
+    },
+    "linuxPath": {
+      "description": "Linux filesystem path up to 4096 chars, strictly rejecting NUL byte (U+0000) while preserving other valid characters (newlines, tabs, spaces)",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^\\u0000]+$"
+    }
+  }
+}

@@ -1,0 +1,44 @@
+[Unit]
+Description=Sentinel Runtime read-only Tetragon gRPC gateway
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=5min
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=sentinel-tetragon-proxy
+Group=sentinel-runtime
+# Add only the site-specific group/ACL needed to connect to Tetragon's upstream socket.
+EnvironmentFile=/etc/sentinel-runtime/tetragon-proxy.env
+WorkingDirectory=/opt/sentinel-runtime
+ExecStart=/usr/bin/node /opt/sentinel-runtime/bin/sentinel-runtime.js tetragon-readonly-proxy --upstream-address ${SENTINEL_TETRAGON_UPSTREAM_ADDRESS} --listen-address unix:///run/sentinel-runtime/tetragon-readonly.sock --socket-mode ${SENTINEL_TETRAGON_SOCKET_MODE}
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+KillSignal=SIGTERM
+UMask=0027
+RuntimeDirectory=sentinel-runtime
+RuntimeDirectoryMode=0750
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

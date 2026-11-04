@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.0.0",
+  "event_id": "018f4a12-89b0-7d34-9214-e0b5f8842101",
+  "event_type": "FILE_READ",
+  "source_provider": "tetragon",
+  "source_event_type": "PROCESS_KPROBE",
+  "source_event_id": "9482014",
+  "host_id": "worker-node-01",
+  "boot_id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+  "source_timestamp": "1793628400123456789",
+  "observed_timestamp": "1793628400125000000",
+  "monotonic_timestamp": "84920491823",
+  "sensor_version": "tetragon-1.1.2",
+  "policy_id": "tp-default-security",
+  "policy_version": "sha256:7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
+  "completeness": "COMPLETE",
+  "process_identity": {
+    "exec_id": "d29ya2VyLXByb2QtYXoxOjE4OTI4MTkyMzQ6NDAwMg==",
+    "parent_exec_id": "d29ya2VyLXByb2QtYXoxOjE4OTI4MTkyMDA6NDAwMQ==",
+    "pid": 4002,
+    "tid": 4002,
+    "process_start_time": "1793628399000000000",
+    "executable_path": "/usr/local/bin/node",
+    "executable_digest": {
+      "algorithm": "sha256",
+      "hex": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+    },
+    "uid": 1000,
+    "euid": 1000,
+    "process_namespace": {
+      "pid_ns": "4026531836",
+      "mnt_ns": "4026532210",
+      "net_ns": "4026532215"
+    },
+    "identity_quality": "VERIFIED_OPAQUE"
+  },
+  "workload_context": {
+    "workload_type": "CONTAINER",
+    "container_id": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cgroup_id": "4096",
+    "mount_namespace": "4026532210",
+    "pid_namespace": "4026531836",
+    "network_namespace": "4026532215",
+    "workload_id": "production-api",
+    "k8s_metadata": {
+      "pod_name": "payment-api-7b8f9c-v28",
+      "namespace": "production",
+      "container_name": "api"
+    }
+  },
+  "payload": {
+    "bytes_read": -50,
+    "return_code": 0
+  },
+  "provenance": {
+    "sensor_id": "tetragon-daemon-node-01",
+    "transport_protocol": "UNIX_DOMAIN_SOCKET",
+    "transport_authenticated": true,
+    "collector_id": "sentinel-runtime-agent-01",
+    "ingest_timestamp": "1793628400124000000",
+    "raw_payload_sha256": "4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a"
+  },
+  "loss_metrics": {
+    "loss_ebpf_kernel": 0,
+    "loss_tetragon_throttle": 0,
+    "loss_grpc_transport": 0,
+    "loss_log_rotation": 0,
+    "loss_parser_reject": 0,
+    "loss_runtime_queue": 0,
+    "loss_storage_drop": 0
+  }
+}

@@ -1,0 +1,2626 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sentinel.security/schemas/v2/runtime-event.schema.json",
+  "title": "SentinelRuntimeEventV2",
+  "description": "Sentinel Runtime Event Contract v2 draft R1.4: complete native Tetragon materialization with privacy-preserving defaults, source-aware payloads, and explicit partial process identity.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "event_id",
+    "source_event_key",
+    "event_type",
+    "source_provider",
+    "source_event_type",
+    "host_identity",
+    "timestamps",
+    "sensor_metadata",
+    "process_identity",
+    "workload_context",
+    "payload",
+    "source_cursor",
+    "loss_metrics"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "2.0.0"
+    },
+    "event_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "source_event_key": {
+      "$ref": "#/$defs/sha256"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "PROCESS_EXEC",
+        "PROCESS_EXIT",
+        "FILE_OPEN_ATTEMPT",
+        "FILE_OPEN_RESULT",
+        "FILE_READ",
+        "NETWORK_CONNECT_ATTEMPT",
+        "NETWORK_CONNECT_RESULT",
+        "NETWORK_SEND_ATTEMPT",
+        "NETWORK_SEND_RESULT",
+        "SOCKET_STATE_CHANGE",
+        "IDENTITY_CHANGE",
+        "CAPABILITY_CHECK",
+        "EVENT_LOSS",
+        "SENSOR_HEALTH"
+      ]
+    },
+    "source_provider": {
+      "type": "string",
+      "enum": [
+        "tetragon",
+        "ebpf_custom",
+        "linux_audit",
+        "synthetic_lab",
+        "other_provider",
+        "unknown_source"
+      ]
+    },
+    "source_event_type": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "source_event_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 128
+    },
+    "host_identity": {
+      "type": "object",
+      "required": [
+        "host_id",
+        "boot_id",
+        "node_name",
+        "node_name_status"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "host_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "boot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "node_name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 255
+        },
+        "node_name_status": {
+          "type": "string",
+          "enum": [
+            "OBSERVED_IN_SENSOR",
+            "ABSENT_IN_SENSOR",
+            "STATIC_CONFIGURED"
+          ]
+        }
+      }
+    },
+    "timestamps": {
+      "type": "object",
+      "required": [
+        "source_timestamp",
+        "provider_observation_timestamp",
+        "provider_event_timestamp",
+        "ingest_timestamp"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "source_timestamp": {
+          "$ref": "#/$defs/uint64"
+        },
+        "provider_observation_timestamp": {
+          "$ref": "#/$defs/uint64"
+        },
+        "provider_event_timestamp": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/uint64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ingest_timestamp": {
+          "$ref": "#/$defs/uint64"
+        }
+      }
+    },
+    "sensor_metadata": {
+      "type": "object",
+      "required": [
+        "collector_id",
+        "collector_session_id",
+        "sensor_version",
+        "transport_protocol",
+        "transport_authentication"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "collector_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "collector_session_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sensor_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "transport_protocol": {
+          "type": "string",
+          "enum": [
+            "JSON_FILE_STREAM",
+            "GRPC_UNIX_SOCKET",
+            "GRPC_TCP",
+            "SYNTHETIC_MEMORY",
+            "PROMETHEUS_HTTP",
+            "PROMETHEUS_HTTPS"
+          ]
+        },
+        "transport_authentication": {
+          "type": "string",
+          "enum": [
+            "MUTUAL_TLS",
+            "LOCAL_SOCKET_PEERCRED",
+            "NOT_APPLICABLE_LOCAL_FILE",
+            "NONE_UNAUTHENTICATED",
+            "LOOPBACK_HTTP_UNAUTHENTICATED",
+            "TLS_SERVER_AUTH"
+          ]
+        },
+        "debug_process_flags": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "maxItems": 64
+        },
+        "debug_refcnt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "producer_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "producer_epoch": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "producer_sequence_number": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/uint64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "process_identity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "exec_id",
+            "parent_exec_id",
+            "pid",
+            "tid",
+            "process_start_time",
+            "executable_path",
+            "euid",
+            "ruid",
+            "credentials_capture_status",
+            "identity_quality"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "exec_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "exec_id_capture_status": {
+              "type": "string",
+              "enum": [
+                "CAPTURED",
+                "UNAVAILABLE_IN_SENSOR"
+              ]
+            },
+            "parent_exec_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 512
+            },
+            "pid": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "tid": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "process_start_time": {
+              "$ref": "#/$defs/uint64"
+            },
+            "executable_path": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/linuxPath"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "executable_path_capture_status": {
+              "type": "string",
+              "enum": [
+                "CAPTURED",
+                "UNAVAILABLE_IN_SENSOR"
+              ]
+            },
+            "executable_digest": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "required": [
+                "algorithm",
+                "value"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "algorithm": {
+                  "type": "string",
+                  "enum": [
+                    "sha256",
+                    "sha512",
+                    "md5"
+                  ]
+                },
+                "value": {
+                  "type": "string",
+                  "maxLength": 128
+                }
+              }
+            },
+            "euid": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "ruid": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "euid_capture_status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                null,
+                "OBSERVED_PROCESS_UID",
+                "OBSERVED_EXTENDED_CRED",
+                "EUID_COLLISION_FLAGGED",
+                "UNAVAILABLE_ABSENT_IN_SENSOR"
+              ]
+            },
+            "ruid_capture_status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                null,
+                "OBSERVED_EXTENDED_CRED",
+                "UNAVAILABLE_BASE_SENSOR",
+                "UNAVAILABLE_ABSENT_IN_SENSOR"
+              ]
+            },
+            "credentials_capture_status": {
+              "type": "string",
+              "enum": [
+                "EFFECTIVE_ONLY",
+                "REAL_AND_EFFECTIVE",
+                "UNAVAILABLE",
+                "ABSENT_IN_SENSOR",
+                "COLLISION_UNRESOLVED"
+              ]
+            },
+            "working_dir": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/linuxPath"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "working_dir_capture_status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                null,
+                "CAPTURED",
+                "ROOT_CWD_INFERRED",
+                "REMOVED_BUFFER_FULL",
+                "RESOLUTION_ERROR",
+                "UNAVAILABLE"
+              ]
+            },
+            "flags": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 1024
+            },
+            "flags_capture_status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                null,
+                "CAPTURED",
+                "NO_FLAGS_SET",
+                "UNAVAILABLE"
+              ]
+            },
+            "identity_quality": {
+              "type": "string",
+              "enum": [
+                "PROBED_KERNEL",
+                "INITIAL_PROCFS_LOAD",
+                "PARTIAL_RECONSTRUCTED",
+                "UNVERIFIED"
+              ]
+            },
+            "process_uid_raw": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 4294967295,
+              "description": "Raw Process.uid retained for unresolved provider identity collisions"
+            },
+            "credentials_euid_raw": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 4294967295,
+              "description": "Raw ProcessCredentials.euid retained for unresolved provider identity collisions"
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "workload_context": {
+      "type": "object",
+      "required": [
+        "context_type",
+        "container_id",
+        "pod_name",
+        "namespace_name",
+        "cgroup_path",
+        "namespaces_capture_status"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "context_type": {
+          "type": "string",
+          "enum": [
+            "HOST_PROCESS",
+            "CONTAINER",
+            "KUBERNETES_POD",
+            "UNKNOWN"
+          ]
+        },
+        "container_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "container_id_capture_status": {
+          "type": "string",
+          "enum": ["FULL", "TRUNCATED", "UNAVAILABLE"]
+        },
+        "pod_name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256
+        },
+        "namespace_name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256
+        },
+        "cgroup_path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 4096
+        },
+        "namespaces_capture_status": {
+          "type": "string",
+          "enum": [
+            "UNAVAILABLE_IN_BASE_SENSOR",
+            "CAPTURED",
+            "UNAVAILABLE"
+          ]
+        },
+        "pid_ns": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/uint32String"
+            },
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mnt_ns": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/uint32String"
+            },
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "net_ns": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/uint32String"
+            },
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "source_cursor": {
+      "type": "object",
+      "required": [
+        "cursor_kind",
+        "raw_payload_sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "inode": {
+          "$ref": "#/$defs/uint64"
+        },
+        "byte_offset": {
+          "$ref": "#/$defs/uint64"
+        },
+        "byte_length": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777216
+        },
+        "payload_byte_length": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777216
+        },
+        "delimiter_byte_length": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "file_generation_id": {
+          "$ref": "#/$defs/uint64"
+        },
+        "raw_payload_sha256": {
+          "oneOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ],
+          "description": "SHA-256 of exact provider response bytes; null only when a metrics scrape failed before receiving a response body"
+        },
+        "cursor_kind": {
+          "type": "string",
+          "enum": [
+            "FILE_BYTES",
+            "GRPC_SEQUENCE",
+            "IN_MEMORY_SEQUENCE",
+            "METRICS_SCRAPE"
+          ]
+        },
+        "device_id": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,19})$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Linux dev_t encoded as canonical decimal string"
+        },
+        "stream_epoch": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sequence_number": {
+          "$ref": "#/$defs/uint64"
+        },
+        "scrape_epoch": {
+          "$ref": "#/$defs/uuid"
+        },
+        "scrape_status": {
+          "type": "string",
+          "enum": [
+            "SUCCESS",
+            "HTTP_ERROR",
+            "TRANSPORT_ERROR",
+            "PARSE_ERROR",
+            "RESPONSE_TOO_LARGE"
+          ]
+        },
+        "response_status": {
+          "type": ["integer", "null"],
+          "minimum": 100,
+          "maximum": 599
+        }
+      }
+    },
+    "loss_metrics": {
+      "type": "object",
+      "required": [
+        "ebpf_kernel",
+        "sensor_throttle",
+        "grpc_transport",
+        "log_rotation",
+        "parser_reject",
+        "runtime_queue",
+        "storage_drop",
+        "tetragon_bpf_missed_events",
+        "tetragon_listener_overflow",
+        "tetragon_field_filter_drops",
+        "tetragon_observer_queue_drops",
+        "tetragon_aggregation_buffer_drops"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ebpf_kernel": {
+          "$ref": "#/$defs/lossMetric"
+        },
+        "sensor_throttle": {
+          "$ref": "#/$defs/lossMetric"
+        },
+        "grpc_transport": {
+          "$ref": "#/$defs/lossMetric"
+        },
+        "log_rotation": {
+          "$ref": "#/$defs/lossMetric"
+        },
+        "parser_reject": {
+          "$ref": "#/$defs/lossMetric"
+        },
+        "runtime_queue": {
+          "$ref": "#/$defs/lossMetric"
+        },
+        "storage_drop": {
+          "$ref": "#/$defs/lossMetric"
+        },
+        "tetragon_bpf_missed_events": {
+          "$ref": "#/$defs/lossMetric"
+        },
+        "tetragon_listener_overflow": {
+          "$ref": "#/$defs/lossMetric"
+        },
+        "tetragon_field_filter_drops": {
+          "$ref": "#/$defs/lossMetric"
+        },
+        "tetragon_observer_queue_drops": {
+          "$ref": "#/$defs/lossMetric"
+        },
+        "tetragon_aggregation_buffer_drops": {
+          "$ref": "#/$defs/lossMetric"
+        }
+      }
+    },
+    "payload": {
+      "type": "object"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "process_identity": {
+            "properties": {
+              "exec_id": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "exec_id"
+            ]
+          }
+        },
+        "required": [
+          "process_identity"
+        ]
+      },
+      "then": {
+        "properties": {
+          "process_identity": {
+            "required": [
+              "exec_id_capture_status",
+              "pid"
+            ],
+            "properties": {
+              "exec_id_capture_status": {
+                "const": "UNAVAILABLE_IN_SENSOR"
+              },
+              "identity_quality": {
+                "const": "PARTIAL_RECONSTRUCTED"
+              },
+              "pid": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "process_identity": {
+            "properties": {
+              "executable_path": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "executable_path"
+            ]
+          }
+        },
+        "required": [
+          "process_identity"
+        ]
+      },
+      "then": {
+        "properties": {
+          "process_identity": {
+            "required": [
+              "executable_path_capture_status"
+            ],
+            "properties": {
+              "executable_path_capture_status": {
+                "const": "UNAVAILABLE_IN_SENSOR"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "PROCESS_EXEC"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "arguments_raw",
+              "argv",
+              "arguments_capture_status"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "arguments_raw": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 131072
+              },
+              "argv": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string",
+                  "maxLength": 131072
+                },
+                "maxItems": 1024
+              },
+              "arguments_capture_status": {
+                "type": "string",
+                "enum": [
+                  "CAPTURED_EXACT",
+                  "RAW_STRING_ONLY",
+                  "TRUNCATED",
+                  "UNAVAILABLE_PARENT_MISS",
+                  "EMPTY_STRING_OR_NO_ARGS",
+                  "CAPTURE_ERROR",
+                  "REDACTED_BY_POLICY"
+                ]
+              },
+              "environment_variables": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "env_capture_status": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  null,
+                  "CAPTURED",
+                  "CAPTURE_ERROR",
+                  "UNAVAILABLE",
+                  "REDACTED_BY_POLICY"
+                ]
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "arguments_capture_status": {
+                      "not": {
+                        "const": "CAPTURED_EXACT"
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "argv": {
+                      "type": "null"
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "arguments_capture_status": {
+                      "const": "CAPTURED_EXACT"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "argv": {
+                      "type": "array"
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "arguments_capture_status": {
+                      "const": "EMPTY_STRING_OR_NO_ARGS"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "arguments_raw": {
+                      "const": ""
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "arguments_capture_status": {
+                      "enum": [
+                        "UNAVAILABLE_PARENT_MISS",
+                        "CAPTURE_ERROR",
+                        "REDACTED_BY_POLICY"
+                      ]
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "arguments_raw": {
+                      "type": "null"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "PROCESS_EXIT"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "termination"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "termination": {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "exit_status",
+                  "signal_name",
+                  "status_origin"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "EXITED",
+                      "SIGNALED",
+                      "AMBIGUOUS",
+                      "UNKNOWN"
+                    ]
+                  },
+                  "exit_status": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0,
+                    "maximum": 4294967295
+                  },
+                  "signal_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "minLength": 1,
+                    "maxLength": 32
+                  },
+                  "status_origin": {
+                    "type": "string",
+                    "enum": [
+                      "PROTO3_SCALAR_ZERO_INFERRED",
+                      "EXPLICIT_NONZERO",
+                      "NOT_APPLICABLE_SIGNALED",
+                      "CONTRADICTORY_DATA",
+                      "UNAVAILABLE",
+                      "UNVERIFIED_OMISSION_UNKNOWN"
+                    ]
+                  }
+                },
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "status_origin": {
+                          "const": "PROTO3_SCALAR_ZERO_INFERRED"
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "kind": {
+                          "const": "EXITED"
+                        },
+                        "exit_status": {
+                          "const": 0
+                        },
+                        "signal_name": {
+                          "type": "null"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "status_origin": {
+                          "const": "EXPLICIT_NONZERO"
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "kind": {
+                          "const": "EXITED"
+                        },
+                        "exit_status": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 4294967295
+                        },
+                        "signal_name": {
+                          "type": "null"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "status_origin": {
+                          "const": "NOT_APPLICABLE_SIGNALED"
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "kind": {
+                          "const": "SIGNALED"
+                        },
+                        "exit_status": {
+                          "type": "null"
+                        },
+                        "signal_name": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "status_origin": {
+                          "const": "CONTRADICTORY_DATA"
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "kind": {
+                          "const": "AMBIGUOUS"
+                        },
+                        "exit_status": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 4294967295
+                        },
+                        "signal_name": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "status_origin": {
+                          "enum": [
+                            "UNVERIFIED_OMISSION_UNKNOWN",
+                            "UNAVAILABLE"
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "kind": {
+                          "const": "UNKNOWN"
+                        },
+                        "exit_status": {
+                          "type": "null"
+                        },
+                        "signal_name": {
+                          "type": "null"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "kind": {
+                          "const": "EXITED"
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "status_origin": {
+                          "enum": [
+                            "PROTO3_SCALAR_ZERO_INFERRED",
+                            "EXPLICIT_NONZERO"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "kind": {
+                          "const": "SIGNALED"
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "status_origin": {
+                          "const": "NOT_APPLICABLE_SIGNALED"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "kind": {
+                          "const": "AMBIGUOUS"
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "status_origin": {
+                          "const": "CONTRADICTORY_DATA"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "kind": {
+                          "const": "UNKNOWN"
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "status_origin": {
+                          "enum": [
+                            "UNVERIFIED_OMISSION_UNKNOWN",
+                            "UNAVAILABLE"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "FILE_OPEN_ATTEMPT"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "path",
+              "flags",
+              "flags_capture_status",
+              "mode"
+            ],
+            "properties": {
+              "path": {
+                "$ref": "#/$defs/linuxPath"
+              },
+              "dfd": {
+                "type": ["integer", "null"],
+                "minimum": -2147483648,
+                "maximum": 2147483647
+              },
+              "flags": {
+                "oneOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 4294967295
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 64
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "mode": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "flags_capture_status": {
+                "type": "string",
+                "enum": [
+                  "CAPTURED_BTF_RESOLVED",
+                  "UNAVAILABLE_POINTER_NOT_DEREFERENCED",
+                  "UNAVAILABLE_KERNEL_VARIANT"
+                ]
+              }
+            },
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "flags_capture_status": {
+                      "const": "UNAVAILABLE_POINTER_NOT_DEREFERENCED"
+                    }
+                  },
+                  "required": [
+                    "flags_capture_status"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "flags": {
+                      "type": "null"
+                    },
+                    "mode": {
+                      "type": "null"
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "flags_capture_status": {
+                      "const": "CAPTURED_BTF_RESOLVED"
+                    }
+                  },
+                  "required": [
+                    "flags_capture_status"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "flags": {
+                      "oneOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "array"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "FILE_OPEN_RESULT"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "path",
+              "return_code"
+            ],
+            "properties": {
+              "path": {
+                "$ref": "#/$defs/linuxPath"
+              },
+              "fd": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "return_code": {
+                "type": "integer"
+              },
+              "errno": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "FILE_READ"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "bytes_read",
+              "return_code"
+            ],
+            "properties": {
+              "fd": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "path": {
+                "$ref": "#/$defs/linuxPath"
+              },
+              "bytes_read": {
+                "$ref": "#/$defs/uint64"
+              },
+              "bytes_requested": {
+                "$ref": "#/$defs/uint64"
+              },
+              "return_code": {
+                "type": "integer"
+              },
+              "offset": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/uint64"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "NETWORK_CONNECT_ATTEMPT"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "family",
+              "destination_ip",
+              "destination_port",
+              "protocol"
+            ],
+            "properties": {
+              "family": {
+                "type": "string",
+                "enum": [
+                  "AF_INET",
+                  "AF_INET6",
+                  "AF_UNIX"
+                ]
+              },
+              "destination_ip": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "destination_port": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              "protocol": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 32
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 255
+                  }
+                ]
+              },
+              "socket_fd": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "source_ip": {
+                "type": ["string", "null"],
+                "maxLength": 255
+              },
+              "source_port": {
+                "type": ["integer", "null"],
+                "minimum": 0,
+                "maximum": 65535
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "NETWORK_CONNECT_RESULT"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "return_code"
+            ],
+            "properties": {
+              "socket_fd": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "return_code": {
+                "type": "integer"
+              },
+              "errno": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "socket_state": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 64
+              },
+              "family": {
+                "type": "string",
+                "enum": ["AF_INET", "AF_INET6", "AF_UNIX"]
+              },
+              "destination_ip": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "destination_port": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              "protocol": {
+                "oneOf": [
+                  { "type": "string", "maxLength": 32 },
+                  { "type": "integer", "minimum": 0, "maximum": 255 }
+                ]
+              },
+              "source_ip": {
+                "type": ["string", "null"],
+                "maxLength": 255
+              },
+              "source_port": {
+                "type": ["integer", "null"],
+                "minimum": 0,
+                "maximum": 65535
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "NETWORK_SEND_ATTEMPT"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "bytes_requested"
+            ],
+            "properties": {
+              "socket_fd": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "destination_ip": {
+                "type": "string",
+                "maxLength": 255
+              },
+              "destination_port": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              "family": {
+                "type": "string",
+                "enum": ["AF_INET", "AF_INET6", "AF_UNIX"]
+              },
+              "protocol": {
+                "oneOf": [
+                  { "type": "string", "maxLength": 32 },
+                  { "type": "integer", "minimum": 0, "maximum": 255 }
+                ]
+              },
+              "source_ip": {
+                "type": ["string", "null"],
+                "maxLength": 255
+              },
+              "source_port": {
+                "type": ["integer", "null"],
+                "minimum": 0,
+                "maximum": 65535
+              },
+              "socket_state": {
+                "type": ["string", "null"],
+                "maxLength": 64
+              },
+              "bytes_requested": {
+                "$ref": "#/$defs/uint64"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "NETWORK_SEND_RESULT"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "bytes_requested",
+              "bytes_accepted_by_kernel",
+              "return_code",
+              "destination_ip",
+              "destination_port",
+              "evidence_semantics"
+            ],
+            "properties": {
+              "socket_fd": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "bytes_accepted_by_kernel": {
+                "$ref": "#/$defs/uint64"
+              },
+              "bytes_requested": {
+                "$ref": "#/$defs/uint64"
+              },
+              "return_code": {
+                "type": "integer"
+              },
+              "destination_ip": {
+                "type": "string",
+                "maxLength": 255
+              },
+              "destination_port": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              "family": {
+                "type": "string",
+                "enum": ["AF_INET", "AF_INET6", "AF_UNIX"]
+              },
+              "protocol": {
+                "oneOf": [
+                  { "type": "string", "maxLength": 32 },
+                  { "type": "integer", "minimum": 0, "maximum": 255 }
+                ]
+              },
+              "source_ip": {
+                "type": ["string", "null"],
+                "maxLength": 255
+              },
+              "source_port": {
+                "type": ["integer", "null"],
+                "minimum": 0,
+                "maximum": 65535
+              },
+              "socket_state": {
+                "type": ["string", "null"],
+                "maxLength": 64
+              },
+              "evidence_semantics": {
+                "type": "string",
+                "enum": [
+                  "LOCAL_SEND_RETURN",
+                  "LOCAL_STACK_ACCEPTED_BYTES",
+                  "SENSITIVE_ACCESS_AND_LOCAL_STACK_ACTIVITY"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "SOCKET_STATE_CHANGE"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "old_state",
+              "new_state"
+            ],
+            "properties": {
+              "socket_fd": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "old_state": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "new_state": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "IDENTITY_CHANGE"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "old_uid",
+              "new_uid",
+              "old_euid",
+              "new_euid",
+              "mechanism"
+            ],
+            "properties": {
+              "old_uid": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "new_uid": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "old_euid": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "new_euid": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "mechanism": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "CAPABILITY_CHECK"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "capability_value",
+              "audit_result",
+              "return_code"
+            ],
+            "properties": {
+              "capability_value": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 63
+              },
+              "capability_name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 64
+              },
+              "audit_result": {
+                "type": "string",
+                "enum": [
+                  "GRANTED",
+                  "DENIED"
+                ]
+              },
+              "return_code": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "EVENT_LOSS"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "loss_source",
+              "dropped_count",
+              "window_seconds",
+              "window_status",
+              "scope"
+            ],
+            "properties": {
+              "loss_source": {
+                "type": "string",
+                "enum": [
+                  "ebpf_kernel",
+                  "sensor_throttle",
+                  "tetragon_bpf_missed_events",
+                  "tetragon_listener_overflow",
+                  "tetragon_field_filter_drops",
+                  "tetragon_observer_queue_drops",
+                  "tetragon_aggregation_buffer_drops",
+                  "grpc_transport",
+                  "log_rotation",
+                  "parser_reject",
+                  "runtime_queue",
+                  "storage_drop"
+                ]
+              },
+              "dropped_count": {
+                "$ref": "#/$defs/uint64"
+              },
+              "window_seconds": {
+                "oneOf": [
+                  { "type": "number", "minimum": 0 },
+                  { "type": "null" }
+                ]
+              },
+              "window_status": {
+                "type": "string",
+                "enum": ["MEASURED", "APPROXIMATED", "UNKNOWN"]
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "GLOBAL",
+                  "CGROUP",
+                  "WORKLOAD"
+                ]
+              },
+              "cgroup_path": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 4096
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "SENSOR_HEALTH"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "sensor_status",
+              "uptime_seconds",
+              "heartbeat_timestamp"
+            ],
+            "properties": {
+              "sensor_status": {
+                "type": "string",
+                "enum": [
+                  "HEALTHY",
+                  "DEGRADED",
+                  "RECOVERING",
+                  "UNAVAILABLE"
+                ]
+              },
+              "uptime_seconds": {
+                "oneOf": [
+                  { "$ref": "#/$defs/uint64" },
+                  { "type": "null" }
+                ]
+              },
+              "uptime_status": {
+                "type": "string",
+                "enum": ["OBSERVED", "UNKNOWN", "UNAVAILABLE"]
+              },
+              "coverage_status": {
+                "type": "string",
+                "enum": ["COMPLETE", "PARTIAL", "UNAVAILABLE"]
+              },
+              "counter_reset_domains": {
+                "type": "array",
+                "uniqueItems": true,
+                "maxItems": 12,
+                "items": {
+                  "type": "string",
+                  "maxLength": 64
+                }
+              },
+              "counter_unverifiable_domains": {
+                "type": "array",
+                "uniqueItems": true,
+                "maxItems": 12,
+                "items": {
+                  "type": "string",
+                  "maxLength": 64
+                }
+              },
+              "unavailable_counters": {
+                "type": "array",
+                "uniqueItems": true,
+                "maxItems": 32,
+                "items": {
+                  "type": "string",
+                  "maxLength": 128
+                }
+              },
+              "observer_error_count": {
+                "oneOf": [
+                  { "$ref": "#/$defs/uint64" },
+                  { "type": "null" }
+                ]
+              },
+              "health_detail": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "heartbeat_timestamp": {
+                "$ref": "#/$defs/uint64"
+              },
+              "active_tracing_policies": {
+                "type": "array",
+                "maxItems": 256,
+                "items": {
+                  "type": "string",
+                  "maxLength": 128
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "workload_context": {
+            "properties": {
+              "context_type": {
+                "const": "HOST_PROCESS"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "workload_context": {
+            "properties": {
+              "container_id": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "workload_context": {
+            "properties": {
+              "context_type": {
+                "const": "CONTAINER"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "workload_context": {
+            "properties": {
+              "container_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "process_identity": {
+            "properties": {
+              "credentials_capture_status": {
+                "const": "EFFECTIVE_ONLY"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "process_identity": {
+            "properties": {
+              "euid": {
+                "type": "integer"
+              },
+              "ruid": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "process_identity": {
+            "properties": {
+              "credentials_capture_status": {
+                "const": "REAL_AND_EFFECTIVE"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "process_identity": {
+            "properties": {
+              "euid": {
+                "type": "integer"
+              },
+              "ruid": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "process_identity": {
+            "properties": {
+              "credentials_capture_status": {
+                "enum": [
+                  "UNAVAILABLE",
+                  "ABSENT_IN_SENSOR"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "process_identity": {
+            "properties": {
+              "euid": {
+                "type": "null"
+              },
+              "ruid": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "sensor_metadata": {
+            "properties": {
+              "transport_protocol": {
+                "const": "JSON_FILE_STREAM"
+              }
+            }
+          }
+        },
+        "required": [
+          "sensor_metadata"
+        ]
+      },
+      "then": {
+        "properties": {
+          "source_cursor": {
+            "required": [
+              "cursor_kind",
+              "device_id",
+              "inode",
+              "byte_offset",
+              "byte_length",
+              "payload_byte_length",
+              "delimiter_byte_length",
+              "file_generation_id",
+              "raw_payload_sha256"
+            ],
+            "properties": {
+              "cursor_kind": {
+                "const": "FILE_BYTES"
+              },
+              "device_id": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "source_cursor"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "sensor_metadata": {
+            "properties": {
+              "transport_protocol": {
+                "enum": [
+                  "GRPC_UNIX_SOCKET",
+                  "GRPC_TCP"
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "sensor_metadata"
+        ]
+      },
+      "then": {
+        "properties": {
+          "source_cursor": {
+            "required": [
+              "cursor_kind",
+              "stream_epoch",
+              "sequence_number",
+              "raw_payload_sha256"
+            ],
+            "properties": {
+              "cursor_kind": {
+                "const": "GRPC_SEQUENCE"
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "source_cursor"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "sensor_metadata": {
+            "properties": {
+              "transport_protocol": {
+                "const": "SYNTHETIC_MEMORY"
+              }
+            }
+          }
+        },
+        "required": [
+          "sensor_metadata"
+        ]
+      },
+      "then": {
+        "properties": {
+          "source_cursor": {
+            "required": [
+              "cursor_kind",
+              "stream_epoch",
+              "sequence_number",
+              "raw_payload_sha256"
+            ],
+            "properties": {
+              "cursor_kind": {
+                "const": "IN_MEMORY_SEQUENCE"
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "source_cursor"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "process_identity": {
+            "properties": {
+              "credentials_capture_status": {
+                "const": "COLLISION_UNRESOLVED"
+              }
+            }
+          }
+        },
+        "required": [
+          "process_identity"
+        ]
+      },
+      "then": {
+        "properties": {
+          "process_identity": {
+            "required": [
+              "process_uid_raw",
+              "credentials_euid_raw"
+            ],
+            "properties": {
+              "process_uid_raw": {
+                "type": "integer"
+              },
+              "credentials_euid_raw": {
+                "type": "integer"
+              },
+              "euid": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "process_identity"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "enum": [
+              "EVENT_LOSS",
+              "SENSOR_HEALTH"
+            ]
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "sensor_metadata": {
+            "required": [
+              "producer_id",
+              "producer_epoch",
+              "producer_sequence_number"
+            ],
+            "properties": {
+              "producer_id": {
+                "type": "string"
+              },
+              "producer_epoch": {
+                "$ref": "#/$defs/uuid"
+              },
+              "producer_sequence_number": {
+                "$ref": "#/$defs/uint64"
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "sensor_metadata"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "enum": [
+              "EVENT_LOSS",
+              "SENSOR_HEALTH"
+            ]
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "process_identity": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "process_identity": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "process_identity"
+      ]
+    }
+  ],
+  "$defs": {
+    "uuid": {
+      "description": "Strict RFC 9562 / RFC 4122 UUIDv4 (Version 4, Variant 1 [89abAB])",
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+    },
+    "sha256": {
+      "description": "Deterministic 64-character hexadecimal SHA-256 digest",
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "uint32String": {
+      "description": "Canonical decimal string representation of a 32-bit unsigned integer (0 to 4294967295)",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,8}|[1-3][0-9]{9}|4[0-1][0-9]{8}|42[0-8][0-9]{7}|429[0-3][0-9]{6}|4294[0-8][0-9]{5}|42949[0-5][0-9]{4}|429496[0-6][0-9]{3}|4294967[0-1][0-9]{2}|42949672[0-8][0-9]|429496729[0-5])$"
+    },
+    "uint64": {
+      "description": "64-bit unsigned integer represented safely as a canonical decimal string without leading zeros (0 to 18446744073709551615) or as an integer (0 to 2^53 - 1)",
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$"
+        },
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      ]
+    },
+    "linuxPath": {
+      "description": "Linux filesystem path up to 4096 chars, strictly rejecting NUL byte (U+0000) while preserving other valid characters (newlines, tabs, spaces)",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^\\u0000]+$"
+    },
+    "lossMetric": {
+      "description": "Structured loss metric with honest observed state and unconstrained 64-bit capacity",
+      "type": "object",
+      "required": [
+        "state",
+        "count"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "MEASURED",
+            "ZERO_OBSERVED",
+            "UNAVAILABLE",
+            "NOT_APPLICABLE",
+            "UNKNOWN",
+            "MEASURED_LOWER_BOUND"
+          ]
+        },
+        "count": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/uint64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "observed_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/uint64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            null,
+            "GLOBAL",
+            "CGROUP",
+            "WORKLOAD",
+            "HOST"
+          ]
+        },
+        "window_seconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "ZERO_OBSERVED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "count": {
+                "oneOf": [
+                  {
+                    "type": "integer",
+                    "const": 0
+                  },
+                  {
+                    "type": "string",
+                    "const": "0"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "UNAVAILABLE",
+                  "NOT_APPLICABLE",
+                  "UNKNOWN"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "count": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "MEASURED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "count": {
+                "$ref": "#/$defs/uint64"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "MEASURED_LOWER_BOUND"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "count": {
+                "$ref": "#/$defs/uint64",
+                "not": { "const": "0" },
+                "minimum": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "MEASURED"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "count": {
+                "$ref": "#/$defs/uint64",
+                "not": { "const": "0" },
+                "minimum": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "MEASURED",
+                  "MEASURED_LOWER_BOUND",
+                  "ZERO_OBSERVED"
+                ]
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "required": [
+              "source",
+              "observed_at"
+            ],
+            "properties": {
+              "source": {
+                "type": "string",
+                "minLength": 1
+              },
+              "observed_at": {
+                "$ref": "#/$defs/uint64"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

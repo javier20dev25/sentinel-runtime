@@ -1,0 +1,59 @@
+{
+  "benchmark_id": "SR-GRPC-002",
+  "target_revision": "fb4c5d638810e6a63cd35f68c50f5740e8db8d75",
+  "measured_worktree_dirty": true,
+  "runtime": {
+    "tetragon_version": "v1.8.0",
+    "node": "v24.21.0",
+    "platform": "linux",
+    "arch": "x64",
+    "os_release": "6.18.54.1-microsoft-standard-WSL2",
+    "cpu": "AMD Ryzen 3 7320U with Radeon Graphics"
+  },
+  "scenario": {
+    "kind": "SYNTHETIC_LOOPBACK_GRPC",
+    "events": 100000,
+    "wire_bytes": 10952720,
+    "wire_corpus_sha256": "713deedeab7d8135643b83b959882076b3f0746e2e220228ad750bc0280b9646",
+    "source_host": "127.0.0.1",
+    "event_mix": {
+      "process_exec": 100000
+    },
+    "queue_capacity_events": 512,
+    "queue_capacity_bytes": 67108864,
+    "batch_size": 128
+  },
+  "result": {
+    "elapsed_ms": 25027.05,
+    "events_per_second": 3995.68,
+    "received": 100000,
+    "persisted": 100000,
+    "supported": 100000,
+    "queue_drops_lower_bound": "0",
+    "queue_dropped_bytes_lower_bound": "0",
+    "unprocessed_at_limit_lower_bound": "0",
+    "peak_sampled_rss_bytes": 227151872,
+    "ledger_records_verified": 100785,
+    "ledger_head_hash": "4aa0660a030ae667c1a61e1903b797221cfa4a731ff04bd7d4131ed7604a49d8"
+  },
+  "methodology": "Single end-to-end local gRPC run; server-side synthetic protobuf generation and transmission are included in elapsed time. This measures the collector, decoder, bounded queue, normalization, engine, and durable SQLite ledger together. It does not measure Tetragon, eBPF, kernel generation, or detection quality. Memory is sampled every 25 ms and may miss short peaks.",
+  "source_hashes": {
+    "bench/tetragon-grpc.js": "2513098eb206389f679eb1049a3ba94f502fbe56347fa97795b9d91bbcabff02",
+    "bin/sentinel-runtime.js": "9d07753e89d50aee0d5230f0ea18fa52ed49d40a2a5d0e85a6ad2a209631a5ac",
+    "src/engine.js": "2b7b9da02fd04282223f0bd7cb459c680804c0f97b21ce0efbb3df8440cba5b1",
+    "src/evidence.js": "9ba527bb4989f9faf3e5fbb10f2fd1d878d78282ee627db89c8ad0818eb42664",
+    "src/collectors/tetragon-grpc.js": "b70f375abb7a4c10154ab138c2d195487b4df60877a7950a1e15cdbb867bbf38",
+    "src/collectors/tetragon-proto.js": "00260b51a4ba89aeb19ed57bffddea99964b534139d1683fed40132983d94199",
+    "src/adapters/tetragon-json.js": "af2d480eab1cf9362ac9b9d4857773ca2b6544fe48436c818b1f6aad830d5cf0",
+    "src/contracts/event-keys.js": "dca6666d8408ef1f52c2baf35ae4574913c8ea048028d1967c507f9306b325a7",
+    "src/contracts/canonical-json.js": "74e7e6d7b8749a0b3cdbb07e8719c9e127980461e6b675ab543b46075460d705",
+    "package.json": "1f5048b8c989148513b90f02cb7759ee94f9ed5c55179fff77e79a61360a3116",
+    "package-lock.json": "93beb3c6afb9b4248d229a653dcc89c88a8772b27461be6a7291c6dad04758c1",
+    "vendor/tetragon/v1.8.0/api/v1/tetragon/bpf.proto": "b09c8b5ba2f0c6430bfbed95ec3b6251f40b07199258ebcf73212c2406685c21",
+    "vendor/tetragon/v1.8.0/api/v1/tetragon/capabilities.proto": "49057d368aec5f36e0007e8fd1654524cdf049afe6b1db57af9916bca6edfd25",
+    "vendor/tetragon/v1.8.0/api/v1/tetragon/events.proto": "0f856aae2dd9862a870782542633f698fe392d6f5dd17ef496460036b17580a1",
+    "vendor/tetragon/v1.8.0/api/v1/tetragon/sensors.proto": "3aea576e97e773418d80bc53ef9eb24600c2fb69c644c57b3ad27b01c139713b",
+    "vendor/tetragon/v1.8.0/api/v1/tetragon/tetragon.proto": "be39aab833f5e70e8f84d9147638f6059f296f1fe22de253108768566517431b"
+  },
+  "manifest_sha256": "9736f77bfc755445fafe2a0f3ad51fd565fac196bd96c451ac4073b749249921"
+}

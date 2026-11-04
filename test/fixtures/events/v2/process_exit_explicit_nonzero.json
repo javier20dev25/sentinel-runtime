@@ -1,0 +1,133 @@
+{
+  "schema_version": "2.0.0",
+  "event_id": "8f3b2a1c-9d4e-4f7b-8a2c-1e0f3b5a7c9d",
+  "source_event_key": "21afcfc0c588763d59aa9b9474314c4a3ed7951ec94a552a05dfb3bec00105a9",
+  "event_type": "PROCESS_EXIT",
+  "source_provider": "synthetic_lab",
+  "source_event_type": "process_exit",
+  "source_event_id": null,
+  "host_identity": {
+    "host_id": "sentinel-host-prod-01",
+    "boot_id": "8f5a2b1c-3d4e-4f6a-8b8c-9d0e1f2a3b4c",
+    "node_name": "DESKTOP-KI5APP4",
+    "node_name_status": "OBSERVED_IN_SENSOR"
+  },
+  "timestamps": {
+    "source_timestamp": "1793662267642869315",
+    "provider_observation_timestamp": "1793662267642869315",
+    "provider_event_timestamp": "1793662267645000000",
+    "ingest_timestamp": "1793662267650000000"
+  },
+  "sensor_metadata": {
+    "collector_id": "collector-agent-linux-01",
+    "collector_session_id": "3c8a1e2f-5b6d-4c7e-9f0a-1b2c3d4e5f6a",
+    "sensor_version": "v1.8.0",
+    "transport_protocol": "JSON_FILE_STREAM",
+    "transport_authentication": "NOT_APPLICABLE_LOCAL_FILE",
+    "debug_process_flags": [
+      "execve",
+      "clone"
+    ],
+    "debug_refcnt": 0
+  },
+  "process_identity": {
+    "exec_id": "DESKTOP-KI5APP4:26038459424888:1310",
+    "parent_exec_id": "DESKTOP-KI5APP4:26037703875323:1309",
+    "pid": 1310,
+    "tid": 1310,
+    "process_start_time": "1793662267642871299",
+    "executable_path": "/usr/bin/umount",
+    "executable_digest": {
+      "algorithm": "sha256",
+      "value": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "euid": 0,
+    "ruid": null,
+    "credentials_capture_status": "EFFECTIVE_ONLY",
+    "working_dir": "/",
+    "working_dir_capture_status": "ROOT_CWD_INFERRED",
+    "flags": "execve clone",
+    "flags_capture_status": "CAPTURED",
+    "identity_quality": "PROBED_KERNEL"
+  },
+  "workload_context": {
+    "context_type": "HOST_PROCESS",
+    "container_id": null,
+    "pod_name": null,
+    "namespace_name": null,
+    "cgroup_path": "/system.slice/docker.service",
+    "namespaces_capture_status": "UNAVAILABLE_IN_BASE_SENSOR",
+    "pid_ns": null,
+    "mnt_ns": null,
+    "net_ns": null
+  },
+  "source_cursor": {
+    "inode": 1441852,
+    "byte_offset": 8250,
+    "byte_length": 826,
+    "payload_byte_length": 825,
+    "delimiter_byte_length": 1,
+    "file_generation_id": 1,
+    "raw_payload_sha256": "0e9d24b946c1d2505a84b92ac3c5e579a97f51de5f284a31a7e81361eeb2f818",
+    "cursor_kind": "FILE_BYTES",
+    "device_id": "2049"
+  },
+  "loss_metrics": {
+    "ebpf_kernel": {
+      "state": "UNKNOWN",
+      "count": null
+    },
+    "sensor_throttle": {
+      "state": "UNKNOWN",
+      "count": null
+    },
+    "grpc_transport": {
+      "state": "UNKNOWN",
+      "count": null
+    },
+    "log_rotation": {
+      "state": "UNKNOWN",
+      "count": null
+    },
+    "parser_reject": {
+      "state": "UNKNOWN",
+      "count": null
+    },
+    "runtime_queue": {
+      "state": "UNKNOWN",
+      "count": null
+    },
+    "storage_drop": {
+      "state": "UNKNOWN",
+      "count": null
+    },
+    "tetragon_bpf_missed_events": {
+      "state": "UNKNOWN",
+      "count": null
+    },
+    "tetragon_listener_overflow": {
+      "state": "UNKNOWN",
+      "count": null
+    },
+    "tetragon_field_filter_drops": {
+      "state": "UNKNOWN",
+      "count": null
+    },
+    "tetragon_observer_queue_drops": {
+      "state": "UNKNOWN",
+      "count": null
+    },
+    "tetragon_aggregation_buffer_drops": {
+      "state": "UNKNOWN",
+      "count": null
+    }
+  },
+  "payload": {
+    "termination": {
+      "kind": "EXITED",
+      "exit_status": 1,
+      "signal_name": null,
+      "status_origin": "EXPLICIT_NONZERO"
+    }
+  }
+}
