@@ -60,7 +60,8 @@ The template leaves metrics polling disabled because Tetragon's non-Kubernetes m
 
 ## Operational limits
 
-- gRPC has no upstream replay cursor or acknowledgement, so reconnects remain an `UNKNOWN` gap and cannot recover missed events.
-- The evidence ledger is local and grows with event volume. Define and validate an external retention, export, and anchoring procedure before production rollout; do not delete records in place without an approved custody process.
-- The unit does not implement tenant isolation, remote fleet management, signed policy distribution, automatic Tetragon installation, or host enforcement.
-- Validate the unit and resource limits on every supported distribution and kernel before deployment. The recorded WSL2 smoke run is not a Linux production compatibility claim.
+- **Permission separation & residual upstream privileges:** The gateway architecture strictly separates duties: the collector account has access only to the filtered client socket (`/run/sentinel-runtime/tetragon-readonly.sock`), with zero capabilities and no access to upstream Tetragon. However, the proxy process itself requires site-specific upstream access to Tetragon's administrative socket or TLS endpoint; a compromise of the proxy process can exercise whatever upstream access that account possesses. The gateway does not replace server-side upstream authorization.
+- **Distribution compatibility not established:** The systemd unit templates are operator-managed references. Installation compatibility, security context enforcement, and service lifecycle have not been validated across production Linux distributions (e.g., Ubuntu 22.04/24.04, Debian 12, RHEL 9). The recorded WSL2 verification was performed with mock paths and does not constitute a production distribution certification.
+- **No upstream stream replay:** gRPC has no upstream replay cursor, sequence offset, or delivery acknowledgement; stream reconnects remain an `UNKNOWN` gap and cannot recover events missed during downtime.
+- **Local evidence ledger:** The evidence ledger is local SQLite and grows with event volume. Define and validate an external retention, export, and anchoring procedure before production rollout; do not delete records in place without an approved custody process.
+- **No fleet or enforcement features:** The units do not implement tenant isolation, remote fleet management, signed policy distribution, automatic Tetragon installation, or host enforcement. Active prevention is not implemented.

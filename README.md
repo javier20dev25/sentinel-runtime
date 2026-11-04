@@ -15,8 +15,8 @@ Sentinel Runtime is an early-stage, local event processor for Linux workload tel
 - Native `PROCESS_EXEC`, `PROCESS_EXIT`, and supported kprobe events are materialized as complete, validated Event Contract v2 records with transport-aware cursors, source hashes, separate source/observation timestamps, workload metadata, and explicit unknown loss states.
 - Hardened [systemd units](docs/DEPLOYMENT_SYSTEMD.md) for separate single-host gateway and collector accounts. Installation, upgrades, and fleet management remain operator-managed.
 - JSONL framing with byte offsets, UTF-8 validation, a 16 MiB per-frame limit, and duplicate-key rejection before `JSON.parse`.
-- Event Contract v1 and v2 validators and a shared native Tetragon-to-v2 materializer. v2 remains a draft contract; schema conformance does not authenticate the sensor.
-- The production v2 validator verifies the RAW, DERIVED, and SYNTHETIC source-event key profiles and requires provenance for measured loss counters.
+- Event Contract v1 validator is frozen (SHA-256: `8c58cd9661eb3e192d89a3480572486fd96fe24f5bdb3219e3053a807515cfe9`). Event Contract v2 candidate (SHA-256: `40ff2d683cb3efd81376cc136af6e4d8afc0ea4d934a9745dec4f2c479a838fa`) provides strict validation for RAW (Profile A), DERIVED (Profile B), SYNTHETIC (Profile C), and provisional RAW_PARTIAL (Profile D) keys. v2 remains an unapproved candidate; schema conformance does not authenticate the sensor.
+- The production v2 validator recomputes and verifies domain-separated event keys, requires provenance for measured loss counters, enforces canonical uint64 decimal strings without `Number` precision loss, and separates `FILE_BYTES` from `GRPC_SEQUENCE` cursors.
 - SQLite evidence records linked with a SHA-256 hash chain, full synchronous commits, and an integrity verifier.
 
 ## Explicit product limits
@@ -167,6 +167,13 @@ docs/specs/                      provenance and architecture specifications
 docs/IMPLEMENTATION_STATUS.md    implemented scope and production gates
 ```
 
-## Release posture
+## Current validation & release posture
 
-This repository remains an observe-only runtime. A bounded live WSL2 Tetragon v1.8.0 smoke run passed, and the optional pinned metrics poller covers five upstream loss counters when the operator enables the metrics endpoint. This does not establish a supported Linux distribution/kernel matrix or complete loss accounting: gRPC has no replay/acknowledgement API, and several Sentinel-side failure domains cannot be inferred from Tetragon metrics. A hardened systemd template is available, but its installation and operation have not been validated across production distributions. Enterprise rollout still needs managed install/upgrade and fleet health, external signing/anchoring and key custody, tenant RBAC, signed policy distribution, and adversarial end-to-end quality benchmarks over pinned real traces. Active prevention is not implemented.
+This repository is an early-stage, observe-only runtime published as an **unapproved development candidate (Phase 001C)**. It is **not** enterprise-ready, production-certified, or fully validated:
+
+- **Test suite results:** 226 total tests — **224 passed, 2 skipped** (Linux-only tests for TLS client key permissions and read-only Unix proxy) on Windows.
+- **Linux execution status:** Under the local host environment, WSL2 invokes Windows `node.exe` through binary interop (`process.platform === 'win32'`); it does not constitute native Linux validation. Native Linux validation (`process.platform === 'linux'`) remains pending native guest Node.js provisioning or GitHub Actions CI execution.
+- **Contract status:** Event Contract v1 is frozen (`8c58cd96...`). Event Contract v2 is an unapproved candidate (`40ff2d68...`). Profile D (`RAW_PARTIAL_PROCESS_EVENT`) remains `PROVISIONAL — REQUIRES NORMATIVE REVIEW`. The provenance matrix status is `REOPENED — BLOCKED`.
+- **Sensor telemetry:** Exploratory observations (`tcp_sendmsg` and `cap_capable` on one Tetragon v1.8.0 WSL2 kernel) are micro-benchmark checks under `scripts/manual/` and do NOT constitute formal L3 sensor evidence. Phases 001D (live sensor validation) and 001E (durable queue architecture) are not started and remain unauthorized.
+- **Deployment & Gateway limits:** The read-only proxy filters downstream RPCs to `GetVersion` and `GetEvents` while preserving exact upstream protobuf bytes, but the proxy process itself requires privileged upstream socket access. Installation compatibility of the systemd unit templates across production Linux distributions is not yet established. Enterprise rollout still requires managed install/upgrade, fleet health monitoring, external ledger signing/anchoring, key custody, tenant RBAC, and signed policy distribution. Active enforcement is not implemented.
+- **License:** Licensed under Business Source License 1.1 (BUSL-1.1).

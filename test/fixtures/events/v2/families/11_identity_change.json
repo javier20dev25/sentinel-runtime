@@ -1,7 +1,7 @@
 {
   "schema_version": "2.0.0",
   "event_id": "8f3b2a1c-9d4e-4f7b-8a2c-1e0f3b5a7c9d",
-  "source_event_key": "ca8456521a10b81f49c88fc8f0f13c9df69e725fcb950f96a6fec7b673ff54d8",
+  "source_event_key": "e46d2a6a8e1aafa53a5fb2838dc0ed1754ba5505bbf7681675482ad6525038e5",
   "event_type": "IDENTITY_CHANGE",
   "source_provider": "synthetic_lab",
   "source_event_type": "sys_setuid",

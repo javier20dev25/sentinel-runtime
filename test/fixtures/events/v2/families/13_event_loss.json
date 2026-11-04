@@ -1,7 +1,7 @@
 {
   "schema_version": "2.0.0",
   "event_id": "8f3b2a1c-9d4e-4f7b-8a2c-1e0f3b5a7c9d",
-  "source_event_key": "37652d15bafebabaee4fc73d45d2671a1594b7c27534f2477a8e32d30b516202",
+  "source_event_key": "7ab51b7455a09b41d29b1ded9588cf368394e12037a41c900a2fec1bce294a70",
   "event_type": "EVENT_LOSS",
   "source_provider": "synthetic_lab",
   "source_event_type": "perf_event_loss",

@@ -26,7 +26,16 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 const Ajv2020 = require('ajv/dist/2020');
-const { rawProviderEventKey } = require('../../src/contracts/event-keys');
+const {
+  DOMAIN,
+  lengthPrefix,
+  rawProviderEventKey,
+  rawPartialProcessEventKey,
+  derivedCorrelatedEventKey,
+  syntheticObservabilityEventKey,
+  canonicalPayloadSha256
+} = require('../../src/contracts/event-keys');
+const { validateEventV2: validateSemanticV2 } = require('../../src/contracts/validate-event-v2');
 
 const schemaPath = path.resolve(__dirname, '../../schemas/runtime-event-v2.schema.json');
 const schemaContent = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
@@ -654,5 +663,426 @@ test('Suite V2-13: Domain-separated cryptographic event identity (R2-05)', async
       'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
     );
     assert.notStrictEqual(computed, base.source_event_key);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// SUITE 14: SECTION 3 NORMATIVE REQUIREMENTS & HARDENING VERIFICATIONS
+// -----------------------------------------------------------------------------
+test('Suite V2-14: Section 3 Normative Requirements & Hardening', async (t) => {
+  const baseExec = JSON.parse(
+    fs.readFileSync(path.join(fixturesDir, 'process_exec_raw_string.json'), 'utf8')
+  );
+
+  await t.test('14.1 Certified test vector matches exactly', () => {
+    assert.strictEqual(
+      baseExec.source_event_key,
+      '49b501dc1e646ed9aa871a659326b2a100672fe1d8298eb57d076a9d5d7d8af1',
+      'Certified test vector key must match documented SHA-256'
+    );
+  });
+
+  await t.test('14.2 Domain separation across RAW, DERIVED, SYNTHETIC profiles', () => {
+    const hostId = 'sentinel-host-01';
+    const bootId = '8f5a2b1c-3d4e-4f6a-8b8c-9d0e1f2a3b4c';
+    const payloadSha = 'a'.repeat(64);
+
+    const rawKey = rawProviderEventKey({
+      hostId,
+      bootId,
+      execId: 'exec-123',
+      eventType: 'PROCESS_EXEC',
+      sourceTimestamp: '1793662267642869315',
+      rawPayloadSha256: payloadSha
+    });
+
+    const derivedKey = derivedCorrelatedEventKey({
+      hostId,
+      bootId,
+      correlationRuleId: 'RULE-01',
+      ruleVersion: '1.0.0',
+      schemaVersion: '2.0.0',
+      resultType: 'CORRELATED_EVENT',
+      primaryEventKey: rawKey,
+      secondaryEventKey: 'b'.repeat(64)
+    });
+
+    const syntheticKey = syntheticObservabilityEventKey({
+      hostId,
+      bootId,
+      producerId: 'loss-monitor-1',
+      producerEpoch: '9a5a2b1c-3d4e-4f6a-8b8c-9d0e1f2a3b4c',
+      sequenceNumber: '1',
+      eventType: 'EVENT_LOSS',
+      payloadSha256: payloadSha
+    });
+
+    const partialKey = rawPartialProcessEventKey({
+      hostId,
+      bootId,
+      pid: 1234,
+      processStartTime: '1793662267642869000',
+      eventType: 'PROCESS_EXEC',
+      sourceTimestamp: '1793662267642869315',
+      rawPayloadSha256: payloadSha
+    });
+
+    const keys = new Set([rawKey, derivedKey, syntheticKey, partialKey]);
+    assert.strictEqual(keys.size, 4, 'All four domain profiles must produce distinct keys');
+  });
+
+  await t.test('14.3 Length prefix UTF-8 byte length vs character length', () => {
+    // Single multi-byte character: 'á' (1 char, 2 UTF-8 bytes: 0xC3 0xA1)
+    const lp1 = lengthPrefix('á');
+    assert.strictEqual(lp1.readBigUInt64BE(0), 2n, 'Length prefix must encode byte count (2), not char count (1)');
+    assert.strictEqual(lp1.length, 10, '8 length bytes + 2 data bytes');
+
+    // Emoji: '🚀' (2 UTF-16 code units, 4 UTF-8 bytes: 0xF0 0x9F 0x99 0x80)
+    const lp2 = lengthPrefix('🚀');
+    assert.strictEqual(lp2.readBigUInt64BE(0), 4n, 'Length prefix must encode UTF-8 byte count (4)');
+    assert.strictEqual(lp2.length, 12, '8 length bytes + 4 data bytes');
+
+    // ASCII: 'hello' (5 chars, 5 bytes)
+    const lp3 = lengthPrefix('hello');
+    assert.strictEqual(lp3.readBigUInt64BE(0), 5n);
+    assert.strictEqual(lp3.length, 13);
+  });
+
+  await t.test('14.4 Maximum uint64 (18446744073709551615) and overflow rejection', () => {
+    const ev = JSON.parse(JSON.stringify(baseExec));
+    ev.timestamps.source_timestamp = '18446744073709551615';
+    assert.strictEqual(validateV2(ev), true, '2^64 - 1 must be valid in schema');
+
+    ev.timestamps.source_timestamp = '18446744073709551616';
+    assert.strictEqual(validateV2(ev), false, '2^64 must be rejected by schema');
+
+    // Near overflow and 2^63 boundary
+    ev.timestamps.source_timestamp = '9223372036854775807'; // 2^63 - 1
+    assert.strictEqual(validateV2(ev), true);
+    ev.timestamps.source_timestamp = '9223372036854775808'; // 2^63 (SQLite signed overflow boundary)
+    assert.strictEqual(validateV2(ev), true);
+  });
+
+  await t.test('14.5 Canonical decimal strings rejection of non-conforming formats', () => {
+    const invalidFormats = [
+      '007',        // leading zeros
+      '01',         // leading zeros
+      '1e10',       // scientific notation
+      '1.8e19',     // scientific notation
+      '-5',         // negative
+      '+100',       // explicit positive sign
+      ' 123 ',      // whitespace padding
+      '123.45',     // float
+      '0x10'        // hex
+    ];
+
+    for (const bad of invalidFormats) {
+      const ev = JSON.parse(JSON.stringify(baseExec));
+      ev.timestamps.source_timestamp = bad;
+      assert.strictEqual(validateV2(ev), false, `Schema must reject non-canonical uint64: "${bad}"`);
+    }
+  });
+
+  await t.test('14.6 EUID collision preservation (COLLISION_UNRESOLVED, raw values present)', () => {
+    const ev = JSON.parse(JSON.stringify(baseExec));
+    ev.process_identity.credentials_capture_status = 'COLLISION_UNRESOLVED';
+    ev.process_identity.process_uid_raw = 1000;
+    ev.process_identity.credentials_euid_raw = 0;
+    ev.process_identity.euid = null;
+
+    const res = validateSemanticV2(ev);
+    assert.strictEqual(res.valid, true, 'COLLISION_UNRESOLVED with raw values must pass schema and semantic validation');
+    assert.ok(
+      res.warnings.some(w => w.includes('Credential identity collision is unresolved')),
+      'Must emit warning about unresolved credential collision'
+    );
+
+    // Missing raw values in collision must fail
+    const evMissing = JSON.parse(JSON.stringify(ev));
+    delete evMissing.process_identity.process_uid_raw;
+    const resMissing = validateSemanticV2(evMissing);
+    assert.strictEqual(resMissing.valid, false);
+    assert.ok(
+      resMissing.errors.some(e => e.keyword === 'credentialCollision'),
+      'Must reject collision when process_uid_raw is missing'
+    );
+  });
+
+  await t.test('14.7 Negative kernel returns for FILE_OPEN_RESULT (fd: null, errno: -return_code)', () => {
+    const openResultFixture = JSON.parse(
+      fs.readFileSync(path.join(familiesDir, '04_file_open_result.json'), 'utf8')
+    );
+
+    // Negative return code (-13: EACCES)
+    const failureEvent = JSON.parse(JSON.stringify(openResultFixture));
+    failureEvent.payload.return_code = -13;
+    failureEvent.payload.fd = null;
+    failureEvent.payload.errno = 13;
+    const resFail = validateSemanticV2(failureEvent);
+    assert.strictEqual(resFail.valid, true, 'Negative return code with fd=null and errno=13 must validate');
+
+    // Inconsistent fd on failure
+    const badFdEvent = JSON.parse(JSON.stringify(failureEvent));
+    badFdEvent.payload.fd = 7;
+    const resBadFd = validateSemanticV2(badFdEvent);
+    assert.strictEqual(resBadFd.valid, false);
+    assert.ok(resBadFd.errors.some(e => e.keyword === 'kernelReturnInvariant'));
+
+    // Inconsistent errno on failure
+    const badErrnoEvent = JSON.parse(JSON.stringify(failureEvent));
+    badErrnoEvent.payload.errno = 2; // expected 13
+    const resBadErrno = validateSemanticV2(badErrnoEvent);
+    assert.strictEqual(resBadErrno.valid, false);
+    assert.ok(resBadErrno.errors.some(e => e.keyword === 'kernelReturnInvariant'));
+  });
+
+  await t.test('14.8 TID = 0 is structurally valid and semantically neutral', () => {
+    const ev = JSON.parse(JSON.stringify(baseExec));
+    ev.process_identity.tid = 0;
+    assert.strictEqual(validateV2(ev), true, 'Schema must accept tid=0');
+    const res = validateSemanticV2(ev);
+    assert.strictEqual(res.valid, true, 'Semantic validator must accept tid=0 without error');
+  });
+
+  await t.test('14.9 File cursor vs gRPC sequence separation validation', () => {
+    // FILE_BYTES with gRPC transport protocol must be rejected
+    const evFileMismatch = JSON.parse(JSON.stringify(baseExec));
+    evFileMismatch.source_cursor.cursor_kind = 'FILE_BYTES';
+    evFileMismatch.sensor_metadata.transport_protocol = 'GRPC_UNIX_SOCKET';
+    const resFileMismatch = validateSemanticV2(evFileMismatch);
+    assert.strictEqual(resFileMismatch.valid, false);
+    assert.ok(resFileMismatch.errors.some(e => e.keyword === 'cursorTransportMismatch'));
+
+    // GRPC_SEQUENCE with file transport protocol must be rejected
+    const evGrpcMismatch = JSON.parse(JSON.stringify(baseExec));
+    evGrpcMismatch.source_cursor = {
+      cursor_kind: 'GRPC_SEQUENCE',
+      stream_epoch: '8f5a2b1c-3d4e-4f6a-8b8c-9d0e1f2a3b4c',
+      sequence_number: '1',
+      raw_payload_sha256: 'a'.repeat(64)
+    };
+    evGrpcMismatch.sensor_metadata.transport_protocol = 'JSON_FILE_STREAM';
+    const resGrpcMismatch = validateSemanticV2(evGrpcMismatch);
+    assert.strictEqual(resGrpcMismatch.valid, false);
+    assert.ok(resGrpcMismatch.errors.some(e => e.keyword === 'cursorTransportMismatch'));
+  });
+});
+
+
+// -----------------------------------------------------------------------------
+// SUITE 15: PROFILE D — RAW_PARTIAL_PROCESS_EVENT KEY VECTORS
+// -----------------------------------------------------------------------------
+test('Suite V2-15: Profile D rawPartialProcessEventKey — Positive and Adversarial Vectors', async (t) => {
+
+  // -------------------------------------------------------------------------
+  // POSITIVE VECTORS (5)
+  // Each vector includes the exact computation sequence in comments:
+  //   field value | byte length | 8-byte big-endian length prefix
+  // The domain tag for all vectors is "SR1|RAW_PARTIAL_PROCESS_EVENT" (byteLen=29, prefix=000000000000001d)
+  // -------------------------------------------------------------------------
+
+  await t.test('15.1 Positive: typical process — PID 1337, PROCESS_EXEC', () => {
+    // Field computation sequence:
+    //   domain           = "SR1|RAW_PARTIAL_PROCESS_EVENT"  byteLen=29  prefix=000000000000001d
+    //   hostId           = "sentinel-host-prod-01"           byteLen=21  prefix=0000000000000015
+    //   bootId           = "8f5a2b1c-3d4e-4f6a-8b8c-9d0e1f2a3b4c"  byteLen=36  prefix=0000000000000024
+    //   pid              = "1337"                            byteLen=4   prefix=0000000000000004
+    //   processStartTime = "1793662267000000000"             byteLen=19  prefix=0000000000000013
+    //     (source: Tetragon Process.start_time as google.protobuf.Timestamp,
+    //      computed as BigInt(seconds)*1_000_000_000n + BigInt(nanos))
+    //   eventType        = "PROCESS_EXEC"                   byteLen=12  prefix=000000000000000c
+    //   sourceTimestamp  = "1793662267642869315"             byteLen=19  prefix=0000000000000013
+    //   rawPayloadSha256 = "a3f1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1"
+    //                                                        byteLen=64  prefix=0000000000000040
+    // Expected SHA-256: 9366cacf95ab34343fd099774272df093e34050561cc3cdd5165b652b81a0804
+    const key = rawPartialProcessEventKey({
+      hostId: 'sentinel-host-prod-01',
+      bootId: '8f5a2b1c-3d4e-4f6a-8b8c-9d0e1f2a3b4c',
+      pid: 1337,
+      processStartTime: '1793662267000000000',
+      eventType: 'PROCESS_EXEC',
+      sourceTimestamp: '1793662267642869315',
+      rawPayloadSha256: 'a3f1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1'
+    });
+    assert.strictEqual(key, '9366cacf95ab34343fd099774272df093e34050561cc3cdd5165b652b81a0804');
+  });
+
+  await t.test('15.2 Positive: structural boundary — not a valid captured event (PID=0, processStartTime="0")', () => {
+    // processStartTime="0" is accepted structurally as a uint64 boundary value.
+    // It does NOT constitute a valid provider-observed process identity anchor.
+    // Field computation sequence:
+    //   domain           = "SR1|RAW_PARTIAL_PROCESS_EVENT"  byteLen=29  prefix=000000000000001d
+    //   hostId           = "sentinel-host-prod-01"           byteLen=21  prefix=0000000000000015
+    //   bootId           = "8f5a2b1c-3d4e-4f6a-8b8c-9d0e1f2a3b4c"  byteLen=36  prefix=0000000000000024
+    //   pid              = "0"                               byteLen=1   prefix=0000000000000001
+    //   processStartTime = "0"                               byteLen=1   prefix=0000000000000001
+    //   eventType        = "PROCESS_EXEC"                   byteLen=12  prefix=000000000000000c
+    //   sourceTimestamp  = "1793662267642869315"             byteLen=19  prefix=0000000000000013
+    //   rawPayloadSha256 = "a3f1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1"
+    //                                                        byteLen=64  prefix=0000000000000040
+    // Expected SHA-256: 25e7961b79f10c318ca2942f96808ff5a54d0adb10b45a7449f19d31465883e9
+    const key = rawPartialProcessEventKey({
+      hostId: 'sentinel-host-prod-01',
+      bootId: '8f5a2b1c-3d4e-4f6a-8b8c-9d0e1f2a3b4c',
+      pid: 0,
+      processStartTime: '0',
+      eventType: 'PROCESS_EXEC',
+      sourceTimestamp: '1793662267642869315',
+      rawPayloadSha256: 'a3f1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1'
+    });
+    assert.strictEqual(key, '25e7961b79f10c318ca2942f96808ff5a54d0adb10b45a7449f19d31465883e9');
+  });
+
+  await t.test('15.3 Positive: uint32 and uint64 upper boundaries — PID=4294967295, timestamps=max uint64', () => {
+    // Field computation sequence:
+    //   domain           = "SR1|RAW_PARTIAL_PROCESS_EVENT"  byteLen=29  prefix=000000000000001d
+    //   hostId           = "sentinel-host-prod-01"           byteLen=21  prefix=0000000000000015
+    //   bootId           = "8f5a2b1c-3d4e-4f6a-8b8c-9d0e1f2a3b4c"  byteLen=36  prefix=0000000000000024
+    //   pid              = "4294967295"                      byteLen=10  prefix=000000000000000a
+    //   processStartTime = "18446744073709551615"            byteLen=20  prefix=0000000000000014
+    //   eventType        = "PROCESS_EXIT"                   byteLen=12  prefix=000000000000000c
+    //   sourceTimestamp  = "18446744073709551615"            byteLen=20  prefix=0000000000000014
+    //   rawPayloadSha256 = "b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5"
+    //                                                        byteLen=64  prefix=0000000000000040
+    // Expected SHA-256: 7827fed2022ed024da2089da0b97104b3f1c6a72ff2cbece582b4dd6fafcb45a
+    const key = rawPartialProcessEventKey({
+      hostId: 'sentinel-host-prod-01',
+      bootId: '8f5a2b1c-3d4e-4f6a-8b8c-9d0e1f2a3b4c',
+      pid: 4294967295,
+      processStartTime: '18446744073709551615',
+      eventType: 'PROCESS_EXIT',
+      sourceTimestamp: '18446744073709551615',
+      rawPayloadSha256: 'b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5'
+    });
+    assert.strictEqual(key, '7827fed2022ed024da2089da0b97104b3f1c6a72ff2cbece582b4dd6fafcb45a');
+  });
+
+  await t.test('15.4 Positive: different host/boot identity — PID=12345, CAPABILITY_CHECK', () => {
+    // Field computation sequence:
+    //   domain           = "SR1|RAW_PARTIAL_PROCESS_EVENT"  byteLen=29  prefix=000000000000001d
+    //   hostId           = "sentinel-host-02"                byteLen=16  prefix=0000000000000010
+    //   bootId           = "ffffffff-ffff-4fff-bfff-ffffffffffff"  byteLen=36  prefix=0000000000000024
+    //   pid              = "12345"                           byteLen=5   prefix=0000000000000005
+    //   processStartTime = "1700000000000000000"             byteLen=19  prefix=0000000000000013
+    //   eventType        = "CAPABILITY_CHECK"               byteLen=16  prefix=0000000000000010
+    //   sourceTimestamp  = "1700000001000000000"             byteLen=19  prefix=0000000000000013
+    //   rawPayloadSha256 = "c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"
+    //                                                        byteLen=64  prefix=0000000000000040
+    // Expected SHA-256: 45c9fe998377505e56da39783f1a39b36fec2e69f27124b319d154349903bc2b
+    const key = rawPartialProcessEventKey({
+      hostId: 'sentinel-host-02',
+      bootId: 'ffffffff-ffff-4fff-bfff-ffffffffffff',
+      pid: 12345,
+      processStartTime: '1700000000000000000',
+      eventType: 'CAPABILITY_CHECK',
+      sourceTimestamp: '1700000001000000000',
+      rawPayloadSha256: 'c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6'
+    });
+    assert.strictEqual(key, '45c9fe998377505e56da39783f1a39b36fec2e69f27124b319d154349903bc2b');
+  });
+
+  await t.test('15.5 Positive: PID=1 (init process), PROCESS_EXIT', () => {
+    // Field computation sequence:
+    //   domain           = "SR1|RAW_PARTIAL_PROCESS_EVENT"  byteLen=29  prefix=000000000000001d
+    //   hostId           = "sentinel-host-prod-01"           byteLen=21  prefix=0000000000000015
+    //   bootId           = "8f5a2b1c-3d4e-4f6a-8b8c-9d0e1f2a3b4c"  byteLen=36  prefix=0000000000000024
+    //   pid              = "1"                               byteLen=1   prefix=0000000000000001
+    //   processStartTime = "1793662100000000001"             byteLen=19  prefix=0000000000000013
+    //   eventType        = "PROCESS_EXIT"                   byteLen=12  prefix=000000000000000c
+    //   sourceTimestamp  = "1793662267642869315"             byteLen=19  prefix=0000000000000013
+    //   rawPayloadSha256 = "d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7"
+    //                                                        byteLen=64  prefix=0000000000000040
+    // Expected SHA-256: 513ab0fe205938541186977cde78c16162e7e20c16e509ecdc165d163b3593be
+    const key = rawPartialProcessEventKey({
+      hostId: 'sentinel-host-prod-01',
+      bootId: '8f5a2b1c-3d4e-4f6a-8b8c-9d0e1f2a3b4c',
+      pid: 1,
+      processStartTime: '1793662100000000001',
+      eventType: 'PROCESS_EXIT',
+      sourceTimestamp: '1793662267642869315',
+      rawPayloadSha256: 'd6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7'
+    });
+    assert.strictEqual(key, '513ab0fe205938541186977cde78c16162e7e20c16e509ecdc165d163b3593be');
+  });
+
+  // -------------------------------------------------------------------------
+  // ADVERSARIAL / NEGATIVE VECTORS (5)
+  // -------------------------------------------------------------------------
+
+  const baseParams = {
+    hostId: 'sentinel-host-prod-01',
+    bootId: '8f5a2b1c-3d4e-4f6a-8b8c-9d0e1f2a3b4c',
+    pid: 100,
+    processStartTime: '1793662267000000000',
+    eventType: 'PROCESS_EXEC',
+    sourceTimestamp: '1793662267642869315',
+    rawPayloadSha256: 'a3f1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1'
+  };
+
+  await t.test('15.6 Adversarial: pid=-1 must throw RangeError identifying the uint32 domain (not uint64)', () => {
+    assert.throws(
+      () => rawPartialProcessEventKey({ ...baseParams, pid: -1 }),
+      (err) => {
+        assert.ok(err instanceof RangeError, 'Must be a RangeError');
+        assert.ok(
+          err.message.includes('uint32'),
+          'Error message must explicitly identify pid as a uint32 field; got: ' + err.message
+        );
+        return true;
+      }
+    );
+  });
+
+  await t.test('15.7 Adversarial: pid=4294967296 must throw RangeError for uint32 overflow', () => {
+    assert.throws(
+      () => rawPartialProcessEventKey({ ...baseParams, pid: 4294967296 }),
+      (err) => {
+        assert.ok(err instanceof RangeError, 'Must be a RangeError');
+        assert.ok(
+          err.message.includes('uint32'),
+          'Error message must reference the uint32 domain; got: ' + err.message
+        );
+        return true;
+      }
+    );
+  });
+
+  await t.test('15.8 Adversarial: processStartTime=1.5e18 (non-integer float) must throw TypeError', () => {
+    assert.throws(
+      () => rawPartialProcessEventKey({ ...baseParams, processStartTime: 1.5e18 }),
+      (err) => {
+        assert.ok(err instanceof TypeError, 'Must be a TypeError; got: ' + err.constructor.name);
+        return true;
+      }
+    );
+  });
+
+  await t.test('15.9 Adversarial: rawPayloadSha256 with wrong length or non-hex chars must throw TypeError', () => {
+    // 63 chars (too short)
+    assert.throws(
+      () => rawPartialProcessEventKey({ ...baseParams, rawPayloadSha256: 'a'.repeat(63) }),
+      (err) => {
+        assert.ok(err instanceof TypeError, 'Must be a TypeError for 63-char digest; got: ' + err.constructor.name);
+        return true;
+      }
+    );
+    // 64 chars but with a non-hex character
+    assert.throws(
+      () => rawPartialProcessEventKey({ ...baseParams, rawPayloadSha256: 'g' + 'a'.repeat(63) }),
+      (err) => {
+        assert.ok(err instanceof TypeError, 'Must be a TypeError for non-hex digest; got: ' + err.constructor.name);
+        return true;
+      }
+    );
+  });
+
+  await t.test('15.10 Adversarial: hostId="" (empty string) must throw TypeError', () => {
+    assert.throws(
+      () => rawPartialProcessEventKey({ ...baseParams, hostId: '' }),
+      (err) => {
+        assert.ok(err instanceof TypeError, 'Must be a TypeError; got: ' + err.constructor.name);
+        return true;
+      }
+    );
   });
 });

@@ -1,7 +1,7 @@
 {
   "schema_version": "2.0.0",
   "event_id": "8f3b2a1c-9d4e-4f7b-8a2c-1e0f3b5a7c9d",
-  "source_event_key": "639c0b9d04789b2bc1bf9de84ce95310011b17909b757251367923ca1bd5a986",
+  "source_event_key": "6ea4829c754937d7163c423cf36351281e707624801a7a2f6b4de424d9b012d4",
   "event_type": "SOCKET_STATE_CHANGE",
   "source_provider": "synthetic_lab",
   "source_event_type": "sock_state_change",

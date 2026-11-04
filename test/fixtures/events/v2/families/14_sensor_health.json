@@ -1,7 +1,7 @@
 {
   "schema_version": "2.0.0",
   "event_id": "8f3b2a1c-9d4e-4f7b-8a2c-1e0f3b5a7c9d",
-  "source_event_key": "7a70aaa596b6343c4555a556fdc597c08e3c3cbe8c9a949ee6d8d3c2be40fc57",
+  "source_event_key": "96879973f1068fba6509f564acdb9f610e1128c9a9dfb4eee5643a6348950d1c",
   "event_type": "SENSOR_HEALTH",
   "source_provider": "synthetic_lab",
   "source_event_type": "daemon_heartbeat",

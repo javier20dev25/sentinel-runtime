@@ -1,7 +1,7 @@
 {
   "schema_version": "2.0.0",
   "event_id": "8f3b2a1c-9d4e-4f7b-8a2c-1e0f3b5a7c9d",
-  "source_event_key": "21afcfc0c588763d59aa9b9474314c4a3ed7951ec94a552a05dfb3bec00105a9",
+  "source_event_key": "e0638494a4fa187eceb6467be172aae8b5091073c0a6538e83934eb5bef5f433",
   "event_type": "PROCESS_EXIT",
   "source_provider": "synthetic_lab",
   "source_event_type": "process_exit",

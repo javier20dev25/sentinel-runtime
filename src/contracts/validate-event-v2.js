@@ -16,6 +16,10 @@ const ajv = new Ajv2020({ allErrors: true, strict: false, validateFormats: false
 const validateSchema = ajv.compile(schema);
 const MAX_UINT64 = 18446744073709551615n;
 const MAX_SAFE_INTEGER = BigInt(Number.MAX_SAFE_INTEGER);
+// SQLite INTEGER is signed 64-bit (-2^63 to 2^63 - 1).
+// Values above 2^63 - 1 (9223372036854775807) up to 2^64 - 1 must be stored as TEXT/BLOB
+// in SQLite persistence to avoid signed integer overflow and data corruption.
+const MAX_SQLITE_SIGNED_INT64 = 9223372036854775807n;
 const UINT64_FIELDS = new Set([
   'source_timestamp', 'provider_observation_timestamp', 'provider_event_timestamp', 'ingest_timestamp',
   'process_start_time', 'pid_ns', 'mnt_ns', 'net_ns', 'inode', 'device_id', 'byte_offset',
@@ -206,7 +210,8 @@ function validateSourceEventKey(event, errors) {
       const metadata = event.sensor_metadata || {};
       expected = syntheticObservabilityEventKey({
         hostId, bootId, producerId: metadata.producer_id, producerEpoch: metadata.producer_epoch,
-        sequenceNumber: metadata.producer_sequence_number, payloadSha256: canonicalPayloadSha256(event.payload)
+        sequenceNumber: metadata.producer_sequence_number, eventType: event.event_type,
+        payloadSha256: canonicalPayloadSha256(event.payload)
       });
     } else {
       if (typeof event.source_cursor?.raw_payload_sha256 !== 'string') throw new TypeError('Raw provider events require raw_payload_sha256');

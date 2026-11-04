@@ -1,7 +1,7 @@
 {
   "schema_version": "2.0.0",
   "event_id": "8f3b2a1c-9d4e-4f7b-8a2c-1e0f3b5a7c9d",
-  "source_event_key": "c1f354ab668434f8f6ee7a5a8d74576e7c345853ae8f50f47995ebf05584fa10",
+  "source_event_key": "50304dfe5c0c24926bb79cf9945e7c5555836ff5bf5340f3d2f59b5c66a42659",
   "event_type": "NETWORK_SEND_RESULT",
   "source_provider": "synthetic_lab",
   "source_event_type": "sys_exit_sendto",

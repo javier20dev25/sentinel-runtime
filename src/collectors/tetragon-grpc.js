@@ -471,6 +471,7 @@ class TetragonGrpcCollector {
             normalizedV2.source_event_key = syntheticObservabilityEventKey({
               hostId: this.hostId, bootId: this.bootId, producerId: normalizedV2.sensor_metadata.producer_id,
               producerEpoch: normalizedV2.sensor_metadata.producer_epoch, sequenceNumber: normalizedV2.sensor_metadata.producer_sequence_number,
+              eventType: normalizedV2.event_type,
               payloadSha256: canonicalPayloadSha256(eventPayload)
             });
             const validation = validateEventV2(normalizedV2);

@@ -265,7 +265,8 @@ function eventTemplate({ eventType, payload, lossMetrics, metadata, cursor, host
   };
   event.source_event_key = syntheticObservabilityEventKey({
     hostId, bootId, producerId: metadata.producer_id, producerEpoch: metadata.producer_epoch,
-    sequenceNumber: metadata.producer_sequence_number, payloadSha256: canonicalPayloadSha256(payload)
+    sequenceNumber: metadata.producer_sequence_number, eventType: event.event_type,
+    payloadSha256: canonicalPayloadSha256(payload)
   });
   const checked = validateEventV2(event);
   if (!checked.valid) throw new Error(`Generated Tetragon metrics event violates Event Contract v2: ${checked.errors.map(item => `${item.path}: ${item.message}`).join('; ')}`);

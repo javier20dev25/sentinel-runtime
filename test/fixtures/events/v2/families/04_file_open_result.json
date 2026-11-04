@@ -1,7 +1,7 @@
 {
   "schema_version": "2.0.0",
   "event_id": "8f3b2a1c-9d4e-4f7b-8a2c-1e0f3b5a7c9d",
-  "source_event_key": "d9f8b0199dbedb2f90f1f30e2583430672bbed4ef439e58cc66f847a3dbf462f",
+  "source_event_key": "7a26610c94758aff8076488c28751c38884389e20f63e65e0b13aaa5d76583a0",
   "event_type": "FILE_OPEN_RESULT",
   "source_provider": "synthetic_lab",
   "source_event_type": "sys_exit_openat",

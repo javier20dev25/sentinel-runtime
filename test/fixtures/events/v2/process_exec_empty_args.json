@@ -1,7 +1,7 @@
 {
   "schema_version": "2.0.0",
   "event_id": "8f3b2a1c-9d4e-4f7b-8a2c-1e0f3b5a7c9d",
-  "source_event_key": "f7e2315b09bc12db0c6f90774889d7c272fe6469fc9fbccf74f4a504d19994af",
+  "source_event_key": "0cfa25ca2b645b213512d2813af6e5e16f6634a553c8a1946e8aad1eb891df47",
   "event_type": "PROCESS_EXEC",
   "source_provider": "synthetic_lab",
   "source_event_type": "process_exec",
