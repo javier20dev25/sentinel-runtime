@@ -1,8 +1,8 @@
 # Sentinel Runtime Engine v1 — Master Architecture & Product Specification
 
 **Document ID:** `SPEC-SENTINEL-RUNTIME-ENGINE-V1`  
-**Revision:** `R1 (Post-Peer Review & Autonomous Response Expansion)`  
-**Status:** `DRAFT — ARCHITECTURE BLUEPRINT & PRODUCT SPECIFICATION`  
+**Revision:** `R2 (Post-Containment Safety & Architectural Enforcement Review)`  
+**Status:** `ENGINE V1 ARCHITECTURE — R2 REVIEWED DRAFT`  
 **Date:** 2026-11-04  
 **Target Workloads:** Linux Servers, Containerized Cloud Infrastructure, Hybrid Human & AI Agent Environments  
 **Telemetry Baseline:** Cilium Tetragon v1.8.0, OpenTelemetry GenAI & MCP Semantic Conventions  
@@ -13,13 +13,13 @@
 ## 1. Executive Product Vision & Strategic Positioning
 
 ### 1.1 The Operational Problem in Modern Environments
-Modern cloud infrastructure is no longer operated solely by human engineers running static bash scripts or fixed CI/CD pipelines. Today, infrastructure execution is **hybrid**:
+Modern cloud infrastructure is operated by a hybrid mix of actors:
 1. **Human Operators:** Developers, DevOps, and SREs using SSH, sudo, bastion hosts, and administrative CLIs.
 2. **Automated Services:** Background cron jobs, deployment microservices, and Kubernetes controllers.
 3. **Autonomous AI Coding & Operations Agents:** LLM-based autonomous agents executing tools, dispatching sub-processes, querying internal APIs via Model Context Protocol (MCP), editing configuration files, and triggering cloud deploys.
 
 When an unexpected file modification, exfiltration attempt, or anomalous process occurs, existing security tools produce disconnected observations:
-- **Kernel eBPF Sensors (Tetragon/Falco):** Detect `pid 4812 executed curl -X POST https://api.internal/data`, but have **zero visibility** into whether that process was spawned by an authenticated developer, an unattended background daemon, or an autonomous AI agent acting on behalf of a user.
+- **Kernel eBPF Sensors (Tetragon/Falco):** Detect low-level syscalls (`pid 4812 executed curl -X POST https://api.internal/data`), but have **zero visibility** into whether that process was spawned by an authenticated developer, an unattended background daemon, or an autonomous AI agent acting on behalf of a user.
 - **Agent Governance Toolkits (Microsoft AGT, LangSmith, Tracing):** Record that `Agent-02 invoked tool exec_shell`, but have **zero visibility** into what syscalls the kernel actually executed, whether child processes were spawned, or if the process escaped its designated working directory.
 - **Traditional SIEM / EDR (Sysdig, Datadog, Wazuh):** Collect high-volume logs and apply heuristic pattern matching, but do not provide verifiable cryptographic chains linking human delegation $\to$ agent intention $\to$ kernel telemetry $\to$ tamper-evident proof.
 
@@ -40,150 +40,93 @@ Sentinel Runtime answers five non-negotiable questions for every security-releva
 
 ---
 
-## 2. The 8 Core Subsystems of the Local Engine
+## 2. Implementation Status by Subsystem
 
-```
-                                  TELEMETRY SOURCES
-  ┌───────────────────────────────────────────────────────────────────────────────────┐
-  │  Tetragon (eBPF)  │  OpenTelemetry (OTel)  │  Falco / Audit  │  AI Agent / MCP    │
-  └───────────────────┴────────────────────────┴─────────────────┴───────────────────┘
-                                           │
-                                           ▼
-  ┌───────────────────────────────────────────────────────────────────────────────────┐
-  │ 01. Source Integration Layer (Ingress Gateways & Read-Only Proxy)                 │
-  └───────────────────────────────────────────────────────────────────────────────────┘
-                                           │ (Raw Wire Bytes + Ingress Sequence)
-                                           ▼
-  ┌───────────────────────────────────────────────────────────────────────────────────┐
-  │ 02. Evidence Acquisition & Provenance Engine                                      │
-  │     - Raw Wire Hash (SHA-256) & Length-Prefixed Keys (Profiles A, B, C, D)        │
-  │     - Explicit Loss Accounting (Ringbuf, Queue, Throttle, Gap)                    │
-  │     - Event Contract v2 Materialization                                           │
-  └───────────────────────────────────────────────────────────────────────────────────┘
-                                           │
-                        ┌──────────────────┴──────────────────┐
-                        ▼                                     ▼
-  ┌─────────────────────────────────────┐   ┌─────────────────────────────────────────┐
-  │ 03. Hybrid Identity & Attribution   │   │ 04. Causal Correlation & Activity Graph │
-  │     - Principal vs Process vs Token │   │     - In-Memory Causal DAG              │
-  │     - OTel GenAI & MCP SemConv      │──▶│     - Durable Reconstructibility        │
-  │     - Strict "UNKNOWN" Invariant    │   │     - Deduplication & Process Anchoring │
-  └─────────────────────────────────────┘   └─────────────────────────────────────────┘
-                        │                                     │
-                        └──────────────────┬──────────────────┘
-                                           ▼
-  ┌───────────────────────────────────────────────────────────────────────────────────┐
-  │ 05. Deterministic Detection & Policy Engine                                       │
-  │     - Workload & Delegation Profiles (Digests, CIDRs, Paths)                      │
-  │     - Boundary Enforcement (Agent Escapes, Privilege Escalation)                  │
-  │     - Zero-Hallucination Explainability                                           │
-  └───────────────────────────────────────────────────────────────────────────────────┘
-                                           │
-                        ┌──────────────────┴──────────────────┐
-                        ▼                                     ▼
-  ┌───────────────────────────────────────────┐ ┌─────────────────────────────────────┐
-  │ 06. Response & Containment Engine         │ │ 07. Evidence, Durability & Ledger   │
-  │     - Levels R0 to R4 (Observe to Kernel) │ │     - Append-Only Disk Journal      │
-  │     - Local Autonomous Containment (cgroup│ │     - SQLite Hash Chain (SHA-256)   │
-  │       network drop, MCP session kill)     │ │     - Offline Dossier Packager      │
-  │     - Zero-Dependency Air-Gap Operation   │ │     - WORM / S3 Object Lock Export  │
-  └───────────────────────────────────────────┘ └─────────────────────────────────────┘
-                        │                                     │
-                        └──────────────────┬──────────────────┘
-                                           ▼
-  ┌───────────────────────────────────────────────────────────────────────────────────┐
-  │ 08. Local Runtime Interface & Cloud Control Bridge                                │
-  │     - CLI (`status`, `verify-ledger`, `export-dossier`, `containment`)            │
-  │     - Filtered Local Unix Socket RPC & Prometheus Metrics                         │
-  │     - Sentinel Cloud API Key Bridge (Incident Intelligence Envelope)              │
-  └───────────────────────────────────────────────────────────────────────────────────┘
-```
+To maintain rigorous transparency, each subsystem is explicitly tagged with its current codebase maturity:
+
+| Subsystem | Name | Status | Current Codebase Implementation |
+|---|---|---|---|
+| **01** | Ingress & Source Integration Layer | `PARTIALLY_IMPLEMENTED` | Read-only Tetragon gRPC proxy (`src/collectors/tetragon-readonly-proxy.js`), JSONL file reader. OTel/MCP bridge is `DESIGN_ONLY`. |
+| **02** | Evidence Acquisition & Provenance Engine | `PARTIALLY_IMPLEMENTED` | Event Contract v2 candidate, Profiles A–D event keys, canonical materializer. Spool disk journal is `DESIGN_ONLY`. |
+| **03** | Hybrid Identity & Attribution Engine | `DESIGN_ONLY` | Identity models specified; runtime attribution logic pending Phase 002. |
+| **04** | Causal Correlation & Activity Graph | `PARTIALLY_IMPLEMENTED` | In-memory process table with LRU expiry (`src/runtime/profiler.js`). Cross-domain MCP-to-Syscall DAG is `DESIGN_ONLY`. |
+| **05** | Deterministic Detection & Policy Engine | `PARTIALLY_IMPLEMENTED` | Exact binary path/digest allowlists, CIDR filters (`src/runtime/engine.js`). Agent boundary policies are `DESIGN_ONLY`. |
+| **06** | Response & Containment Engine (R0–R4) | `DESIGN_ONLY` | Safety architecture and transactional lifecycle specified in R2. Zero runtime code implemented yet. |
+| **07** | Evidence, Durability & Ledger Engine | `PARTIALLY_IMPLEMENTED` | SQLite hash-chain ledger (`src/runtime/evidence.js`). Durable pre-ingest spool and WORM packaging are `DESIGN_ONLY`. |
+| **08** | Local Interface & Cloud Control Bridge | `PARTIALLY_IMPLEMENTED` | CLI status and offline validation commands. Cloud API Key envelope sender is `DESIGN_ONLY`. |
 
 ---
 
-### Subsystem 01: Source Integration Layer
-**Purpose:** Safely ingest heterogeneous runtime signals while strictly isolating the host and runtime from sensor vulnerabilities.
+## 3. The 8 Core Subsystems & The Incident Transaction Model
 
-- **Tetragon gRPC & JSONL Collector:**
-  - Pins to Tetragon `v1.8.0`.
-  - Connects downstream to a read-only gRPC proxy (`src/collectors/tetragon-readonly-proxy.js`) exposing only `GetVersion` and `GetEvents`.
-  - Preserves exact upstream protobuf wire bytes, including unknown fields, without deserialization loss.
-- **OpenTelemetry & AI Agent Receiver (MCP Bridge):**
-  - Accepts OpenTelemetry spans conforming to pinned GenAI Semantic Conventions (`gen_ai.system`, `gen_ai.agent.id`, `gen_ai.tool.name`).
-  - Receives MCP (Model Context Protocol) tool execution receipts containing correlation tokens (`trace_id`, `execution_id`, `caller_identity`).
-- **Auditd / Linux System Hooks:**
-  - Ingests user login records (`pam`, `utmp`, `sshd`) to map interactive sessions to physical TTYs and process subtrees.
-
----
-
-### Subsystem 02: Evidence Acquisition & Provenance Engine
-**Purpose:** Establish immutable data provenance before any analytical parsing or behavioral transformation occurs.
-
-- **Cryptographic Event Key Invariants:**
-  - Employs 8-byte big-endian unsigned length-prefixed domain separation (`src/contracts/event-keys.js`).
-  - **Profile A (`RAW_PROVIDER_EVENT`):** For native sensor events with complete process context (`host_id`, `boot_id`, `exec_id`, `event_type`, `source_timestamp`, `raw_payload_sha256`).
-  - **Profile B (`DERIVED_CORRELATED_EVENT`):** For joined multi-event occurrences; keyed on constituent event keys, rule ID, and version.
-  - **Profile C (`SYNTHETIC_OBSERVABILITY_EVENT`):** For locally generated health, metrics, and gap notifications; keyed on producer identity, epoch, sequence, and event type.
-  - **Profile D (`RAW_PARTIAL_PROCESS_EVENT` — Provisional):** For provider events omitting `exec_id`; anchored on `(host_id, boot_id, pid, process_start_time, event_type, source_timestamp, raw_payload_sha256)`.
-- **Explicit Loss Accounting:**
-  - Strictly separates loss domains: `kernel_ring_buffer`, `sensor_queue`, `sensor_throttle` (rate limits), and `transport_gap`.
-  - Rejects synthetic or aggregated loss estimates; if a sensor disconnects, gap duration is recorded, and event count is marked `null` with status `UNKNOWN`.
-
----
-
-### Subsystem 03: Hybrid Identity & Attribution Engine
-**Purpose:** Unify human, automated, and AI agent identities into a cohesive, auditable hierarchy without fabricating links.
-
-- **Strict Identity Separation Invariant:**
-  The engine enforces four distinct, decoupled relationships that must never be collapsed into a single heuristic:
-  1. **Authenticated Principal:** The verified identity asserting authority (e.g., OIDC email, SSH public key hash).
-  2. **Kernel Process Identity:** The OS-level execution context (`host_id`, `boot_id`, `pid`, `ruid`, `euid`, `cgroup`, namespaces).
-  3. **Signed Delegation Token:** The cryptographic credential issued by the principal authorizing specific scopes or tools.
-  4. **Causal Execution Link:** The proven, time-bounded linkage connecting a delegated tool call to a spawned kernel process.
-  *Invariant:* If any link in this chain cannot be proven with verifiable telemetry, the actor status is strictly evaluated as `UNKNOWN`.
-
-- **Semantic Convention Pinning:**
-  - Standardizes on OpenTelemetry GenAI Semantic Conventions (`gen_ai.system`, `gen_ai.agent.id`, `gen_ai.agent.name`, `gen_ai.tool.name`, `gen_ai.tool.call_id`).
-  - Aligns with Model Context Protocol (MCP) JSON-RPC 2.0 specs for tool discovery, sampling, and call invocation.
-
----
-
-### Subsystem 04: Causal Correlation & Activity Graph
-**Purpose:** Construct a local, directed causal graph connecting high-level intent to low-level system actions.
+### 3.1 Strict Transaction Sequence for Auditable Action
+To prevent states where a containment action is executed but never recorded (e.g. if the runtime crashes or is terminated mid-action), Sentinel Runtime enforces an explicit 7-step transaction order:
 
 ```mermaid
-graph TD
-    H["Principal: HUMAN (alice@corp.com)"] -->|Issues Delegation| D["Delegation Token: Scope(code_review)"]
-    D -->|Authorizes| A["Agent: AI_AGENT (refactor-bot-42)"]
-    A -->|Invokes MCP Tool| T["Tool Call: mcp::run_linter"]
-    T -->|Causal Link (W3C traceparent)| P["Process: /usr/bin/eslint (pid: 14205)"]
-    P -->|Executes Syscall| F["File: /workspace/src/index.js (openat2)"]
-    P -->|Unexpected Fork| X["Process: /bin/bash -i (pid: 14280)"]
-    X -->|Violation Detection| V["Alert / Containment Trigger"]
+sequenceDiagram
+    participant S as Sensor / Ingress
+    participant J as Disk Journal (Spool)
+    participant E as Correlation & Policy
+    participant L as SQLite Ledger
+    participant A as Privileged Responder
+    participant C as Sentinel Cloud Bridge
+
+    S->>J: 1. Capture & Durable Append (Raw Wire Bytes)
+    J->>E: 2. Analyze (Contract v2, Attribution, DAG, Policy)
+    alt Policy Violation Triggered
+        E->>L: 3. Action Intent (ACTION_PLANNED recorded to ledger)
+        E->>A: 4. Execute (Dispatched to isolated responder via IPC)
+        Note over A: 5. Action Dispatched (pidfd / cgroup.kill / nftables)
+        A-->>E: Return actual OS return code & verification status
+        E->>L: 6. Action Result (ACTION_CONFIRMED / ACTION_FAILED / ACTION_OUTCOME_UNKNOWN)
+        opt Cloud API Key Configured
+            E->>C: 7. Export Sanitized Incident Intelligence Envelope
+        end
+    end
 ```
 
-- **Graph Durability Invariant:**
-  - The in-memory Causal DAG is an ephemeral index designed for fast lookup and correlation.
-  - **State Reconstructibility:** Every node and edge in the graph can be 100% reconstructed from the durable journal and SQLite ledger upon agent restart. Memory eviction follows a strict LRU window without losing disk provenance.
+### 3.2 Action Lifecycle States
+Every containment attempt transitions through explicit states recorded in the durable ledger:
+- `ACTION_PLANNED`: Recorded *before* dispatching any signal or network command. Specifies rule ID, target cgroup/pidfd, planned action, and authorization digest.
+- `ACTION_DISPATCHED`: Command has been passed to the privileged responder daemon over the local Unix socket.
+- `ACTION_CONFIRMED`: Operating system confirmed termination (`cgroup.kill` wrote `1`, `pidfd_send_signal` returned `0`, or `nftables` transaction committed).
+- `ACTION_FAILED`: Operating system returned an explicit error (e.g., `ESRCH`, `EPERM`, `EBUSY`).
+- `ACTION_OUTCOME_UNKNOWN`: The responder crashed, timed out, or disconnected before delivery could be verified. **Rule:** The engine must record `ACTION_OUTCOME_UNKNOWN` and schedule reconciliation; it must never invent that the action succeeded.
 
 ---
 
-### Subsystem 05: Deterministic Detection & Policy Engine
-**Purpose:** Evaluate runtime behavior against explicit, explainable security policies without heuristic "black-box" hallucination.
+### Detailed Subsystem Architecture
 
-- **Workload & Delegation Profiles:**
-  - Exact binary path or SHA-256 digest pinning.
-  - Strict destination constraints (hostnames, port numbers, IPv4/IPv6 CIDRs).
-  - Sensitive path boundaries (e.g., `/etc/shadow`, AWS/GCP credential directories).
-- **Agent Delegation Boundaries:**
-  - Defines which tools an AI agent is authorized to invoke and what OS-level binaries those tools are allowed to spawn.
-  - Triggers an alert or observation when an agent attempts an action outside its authorized delegation tree (e.g., an agent tasked with code review running `nmap` or modifying `/etc/hosts`).
-- **Verdicts:** Produces deterministic findings: `NORMAL`, `SUSPICIOUS`, `POLICY_VIOLATION`, or `UNKNOWN`.
+#### Subsystem 01: Source Integration Layer
+- **Tetragon gRPC Read-Only Ingress:** Connects to `src/collectors/tetragon-readonly-proxy.js`. Exposes only `GetVersion` and `GetEvents`. Rejects all administrative RPCs.
+- **OTel / MCP Ingress (Design):** Ingests trace spans and tool call receipts conforming to OpenTelemetry GenAI Semantic Conventions (`gen_ai.system`, `gen_ai.agent.id`, `gen_ai.tool.name`).
+
+#### Subsystem 02: Evidence Acquisition & Provenance Engine
+- **Payload Integrity:** Exact received-payload preservation with explicit loss and gap accounting.
+- **Domain-Separated Keys:** Profiles A (`RAW_PROVIDER_EVENT`), B (`DERIVED_CORRELATED_EVENT`), C (`SYNTHETIC_OBSERVABILITY_EVENT`), and D (`RAW_PARTIAL_PROCESS_EVENT` — Provisional).
+- **Honest Gap Accounting:** When sensors disconnect, the gap is recorded, duration measured, and loss count marked `null` with status `UNKNOWN` (no fabricated drop estimates).
+
+#### Subsystem 03: Hybrid Identity & Attribution Engine
+- **Decoupled Identity Invariant:** Strictly separates:
+  1. *Authenticated Principal* (OIDC, SSH public key).
+  2. *Kernel Process Identity* (`host_id`, `boot_id`, `pid`, `ruid`, `euid`, `cgroup`).
+  3. *Signed Delegation Token* (cryptographic scope token).
+  4. *Causal Execution Link* (W3C traceparent linking tool call to OS process).
+- *Strict Rule:* If any link in the delegation chain cannot be verified with telemetry, identity is marked `UNKNOWN`. `UNKNOWN` attribution must never authorize destructive containment.
+
+#### Subsystem 04: Causal Correlation & Activity Graph
+- **Process Lineage:** Lineage tracked via `(host_id, boot_id, exec_id)`.
+- **Durable Reconstructibility:** The in-memory DAG is an ephemeral correlation cache. Every node and edge is 100% reconstructible from the durable spool and SQLite ledger.
+- **Bounded Memory:** Eviction follows an explicit LRU time-window to prevent OOM under fork bombs.
+
+#### Subsystem 05: Deterministic Detection & Policy Engine
+- **Workload Profiles:** Strict allowlists for binary paths, SHA-256 digests, and IPv4/IPv6 CIDR ranges.
+- **Agent Boundaries:** Verifies that AI agents only execute tools and binaries explicitly permitted in their signed profile.
+- **Verdicts:** `NORMAL`, `SUSPICIOUS`, `POLICY_VIOLATION`, or `UNKNOWN`.
 
 ---
 
-### Subsystem 06: Response & Containment Engine (Autonomous Defense)
-**Purpose:** Enable predictable, graduated responses to verified threats both locally (offline/air-gapped) and across enterprise fleets.
+#### Subsystem 06: Response & Containment Engine (Autonomous Defense)
 
 ```
  LEVEL   NAME                      MECHANISM                       NETWORK/CLOUD
@@ -191,61 +134,100 @@ graph TD
  R0      Observe & Record          Write to tamper-evident ledger  Autonomous
  R1      Local Immediate Alert     Syslog, Unix socket RPC, stdout Autonomous
  R2      Human-in-the-Loop Wait    Hold action pending approval    Autonomous / SaaS
- R3      Pre-Authorized Contain    Local cgroup netdrop, kill      Autonomous
+ R3      Pre-Authorized Contain    cgroup.kill / pidfd / nftables  Autonomous
  R4      Kernel Policy Block       Tetragon eBPF enforcement       Autonomous
 ```
 
-- **Level R0 — Observe & Record:**
-  Default passive mode. Records the full causal chain to the tamper-evident ledger without altering system execution.
-- **Level R1 — Immediate Local Alert:**
-  Emits real-time event notifications over local Unix socket (`/run/sentinel/notify.sock`), systemd journal, and syslog.
-- **Level R2 — Human-in-the-Loop Recommendation:**
-  When an ambiguous or high-impact delegation boundary is approached, pauses tool execution and requests operator verification (via local CLI or Sentinel Cloud web console).
-- **Level R3 — Pre-Authorized Local Containment (Autonomous Air-Gap Mode):**
-  Operates 100% locally without cloud dependency. If a high-confidence violation occurs:
-  1. **MCP Session Suspension:** Sends a cancellation signal to the agent runner / MCP bridge.
-  2. **Process Subtree Termination:** Issues `SIGTERM` / `SIGKILL` to the offending process subtree anchored on `exec_id`.
-  3. **Network Egress Drop:** Drops outbound traffic for the offending container/cgroup using local `nftables` or `iptables` rules without affecting the rest of the host.
-- **Level R4 — Kernel-Level Prevention (eBPF Enforcement):**
-  Enforces inline syscall denial (`SIGKILL` or `-EPERM`) via Tetragon TracingPolicy enforcement.
-  *Safety Boundary:* The Tetragon enforcement channel is strictly separated from the read-only monitoring proxy. Enforcement policies must be pre-compiled, cryptographically signed, and loaded through a dedicated privileged control plane.
+##### 1. R3 Process Containment: Elimination of `exec_id` as OS Signal Handle
+- **The Problem:** `exec_id` is an opaque Tetragon tracking string (`host:boot:pid:start_time`). The Linux kernel does not accept `exec_id` as a target for POSIX signals.
+- **The Solution:**
+  1. **Workload / Agent Subtree Containment (Preferred):** Each monitored agent or container runs inside a dedicated cgroup v2 subtree (e.g., `/sys/fs/cgroup/sentinel.slice/agent-<uuid>/`). Containment is executed by writing `1` to `cgroup.kill`. This terminates all processes and concurrent forks atomically without race conditions.
+  2. **Individual Process Signaling:** If an individual process must be signaled outside a dedicated cgroup, the engine resolves the target `pid`, immediately opens a file descriptor using `pidfd_open(pid, 0)`, verifies that the process start time in `/proc/<pid>/stat` matches the telemetry anchor, and dispatches the signal via `pidfd_send_signal(pidfd, SIGKILL, NULL, 0)`.
+  3. *Safety Invariant:* Never send a signal using a bare integer PID observed asynchronously.
+
+##### 2. R3 MCP Session Control: Adapter-Specific Cancellation
+- **The Problem:** Model Context Protocol (MCP) tool execution cancellation (`notifications/cancelled`) is cooperative. A misbehaving or compromised agent server may ignore cancellation requests.
+- **The Solution:**
+  - MCP cancellation is treated as a **cooperative grace window**:
+    1. Send `notifications/cancelled` with the active `requestId`.
+    2. Start an enforcement timer (default: 500 ms).
+    3. If the runner does not terminate the subprocess and acknowledge cancellation within the timeout, escalate immediately to OS-level process containment (`pidfd_send_signal` or `cgroup.kill`).
+  - Supported Runners: Standardized adapters for Docker/OCI runtime, systemd-run dynamic units, and local sub-process wrappers.
+
+##### 3. R3 Network Containment: Exact nftables Architecture
+- **Supported Mechanism:** Dedicated `nftables` table `sentinel_containment` with hook `output` priority `-100` (before routing/conntrack).
+- **Matching:** Uses `meta cgroup` v2 path matching against the designated cgroup ID.
+- **Coverage:** Drops all outbound TCP and UDP across IPv4 and IPv6.
+- **Existing Sockets:** In addition to nftables packet drops, the responder invokes `ss -K dst ...` or TCP socket teardown to immediately terminate active established connections.
+- **Cleanup & Crash Recovery:** The privileged responder maintains an active lockfile and registers a systemd shutdown hook to flush containment sets if the system restarts in maintenance mode.
+
+##### 4. R4 Tetragon Kernel Enforcement Matrix & Policy Management
+- **The Problem:** Tetragon actions have different semantics and kernel prerequisites. `SIGKILL` on a `write()` kprobe terminates the process but does not prevent the write operation from completing before death.
+- **Enforcement Matrix:**
+
+| Hook / Target | Action | Kernel Prerequisite | Prevents Operation? | Known Limitations & Semantics |
+|---|---|---|---|---|
+| `sys_enter_openat2` | `Override` (-EACCES) | `CONFIG_BPF_KPROBE_OVERRIDE=y` | **YES** (Syscall aborted) | Returns error code directly to caller; process survives. |
+| `sys_enter_execve` | `Override` (-EPERM) | `CONFIG_BPF_KPROBE_OVERRIDE=y` | **YES** (Execution blocked) | Process does not spawn. |
+| `sys_enter_connect` | `Override` (-ECONNREFUSED) | `CONFIG_BPF_KPROBE_OVERRIDE=y` | **YES** (Socket connect fails) | Prevents SYN packet transmission. |
+| `do_sys_openat2` | `Sigkill` | Standard eBPF | **PARTIAL** | Process is terminated, but file may be partially opened. |
+| `vfs_write` | `Sigkill` | Standard eBPF | **NO** | Process is killed, but target block/page may already be written. |
+| `tcp_sendmsg` | `Sigkill` | Standard eBPF | **PARTIAL** | Terminates sender, but current buffer may already be in TCP stack. |
+
+- **Privileged Policy Management Service:**
+  - The read-only monitoring proxy (`src/collectors/tetragon-readonly-proxy.js`) remains strictly read-only and unprivileged.
+  - A dedicated, separate systemd service (`sentinel-runtime-enforcer.service`) runs with `CAP_SYS_ADMIN` and listens on an isolated Unix socket (`/run/sentinel/enforce.sock`, permissions `0600 root:root`).
+  - Before applying any `TracingPolicy`, Sentinel verifies its **Ed25519 cryptographic signature** against a trusted local key in `/etc/sentinel/keys/enforcement.pub`.
+  - Non-Atomic Recovery: Because Tetragon's `ConfigureTracingPolicy` is not atomic, the enforcer executes a two-phase check: applies policy, queries active policies, and rolls back to previous known-good state if verification fails.
+
+##### 5. Safety Controls, Rate Limits & Break-Glass
+- **Default Mode:** Sentinel Runtime boots in `OBSERVE_ONLY` mode unless explicitly configured with `--enforcement-mode=contain`.
+- **Action Rate Limits:** Maximum 5 containment actions per minute per host; excess violations trigger emergency local alerting without cascading system teardown.
+- **Break-Glass File:** Touching `/etc/sentinel/BREAK_GLASS` instantly suspends all automated containment and reverts to observe-only.
+- **Attribution Guardrail:** An event with `UNKNOWN` attribution is forbidden from triggering R3/R4 destructive containment; it triggers Level R1/R2 alerting only.
 
 ---
 
-### Subsystem 07: Evidence, Durability & Ledger Engine
-**Purpose:** Store all accepted events and verdicts in a tamper-evident, crash-resilient local ledger.
+#### Subsystem 07: Evidence, Durability & Ledger Engine
+- **Pre-Ingest Spool:** Append-only disk journal writing raw bytes before memory processing.
+- **SQLite Hash Chain:** Tamper-evident ledger. Formula: $\text{RecordHash}_n = \text{SHA-256}(\text{RecordHash}_{n-1} \,\|\, \text{CanonicalPayload}_n)$.
+- *Forensic Clarification:* The SQLite hash chain provides **tamper-evidence** (detects unauthorized record insertion, deletion, or modification). It does not prevent an adversary with full root access from deleting the database file; true non-repudiation requires external anchoring (S3 Object Lock or Sentinel Cloud WORM).
 
-- **Durable Disk Spool (Pre-Ingest Journal):**
-  - Append-only write-ahead log for raw protobuf wire bytes before parsing.
-  - Ensures that if the collector or engine restarts, uncommitted records are re-delivered without data loss.
-- **SQLite Evidence Hash Chain:**
-  - Uses `node:sqlite` built-in engine.
-  - Every committed record includes: `event_id`, `source_event_key`, `canonical_payload`, `timestamp`, and `prev_hash`.
-  - Hash formula: $\text{RecordHash}_n = \text{SHA-256}(\text{RecordHash}_{n-1} \,\|\, \text{CanonicalPayload}_n)$.
-- **Tamper Boundaries:**
-  - Detects accidental corruption or unauthorized row deletions/insertions.
-  - Root protection requires remote Ed25519 root anchoring and WORM export (S3 Object Lock).
+#### Subsystem 08: Local Interface & Cloud Control Bridge
+- **CLI Commands:** `status`, `verify-ledger`, `export-dossier`, `containment-status`.
+- **Prometheus Scrape:** Port 9100 / metrics endpoint for ingestion rates, queue depths, and gap metrics.
+- **Cloud Bridge:** Authenticates via API Key to push sanitized incident envelopes.
 
 ---
 
-### Subsystem 08: Local Runtime Interface & Cloud Control Bridge
-**Purpose:** Provide operators with transparent local inspection and provide a secure, authenticated bridge to Sentinel Cloud.
+## 4. Threat Model for the Privileged Response Service
 
-- **Local CLI (`bin/sentinel-runtime.js`):**
-  - `status`: Reports engine health, active collector status, loss counters, and version.
-  - `validate-v2`: Standalone schema and cryptographic key validator for offline event files.
-  - `verify-ledger`: Traverses SQLite hash chain from genesis to head and reports verification status.
-  - `export-dossier`: Bundles an incident or time window into a standalone, verifiable evidence dossier (JSONL + cryptographic manifest).
-- **Telemetry Endpoints:**
-  - Prometheus `/metrics` endpoint exposing ingestion throughput, queue depths, deduplication counts, and loss metrics.
-  - Unix socket RPC interface restricted to administrative accounts (`0660` mode).
-- **Cloud Bridge (API Key Integration):**
-  - Optional outbound HTTPS/mTLS connection to Sentinel Cloud.
-  - Transmits a sanitized **Incident Intelligence Envelope**.
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        THREAT MODEL: ENFORCER                          │
+├────────────────────────────────┬───────────────────────────────────────┤
+│ Threat Vector                  │ Mitigation Architecture               │
+├────────────────────────────────┼───────────────────────────────────────┤
+│ PID Reuse Race                 │ Use `pidfd_open` + `/proc/<pid>/stat` │
+│                                │ start time check, or `cgroup.kill`.   │
+├────────────────────────────────┼───────────────────────────────────────┤
+│ Rogue Policy Injection         │ Offline Ed25519 signature verified    │
+│                                │ before handing policy to Tetragon.    │
+├────────────────────────────────┼───────────────────────────────────────┤
+│ DOS via False Containment      │ Rate limiting (max 5/min), strict     │
+│                                │ break-glass file, observe-only default│
+├────────────────────────────────┼───────────────────────────────────────┤
+│ Read-Proxy Compromise          │ Enforcer runs on isolated socket      │
+│                                │ (`0600`); read proxy cannot write.    │
+├────────────────────────────────┼───────────────────────────────────────┤
+│ Crash Between Kill & Ledger    │ Transaction order: ACTION_PLANNED     │
+│                                │ written to disk journal before action.│
+└────────────────────────────────┴───────────────────────────────────────┘
+```
 
 ---
 
-## 3. Commercial Synergy: Sentinel Cloud & The "Code-to-Runtime" Flywheel
+## 5. Commercial Synergy: Sentinel Cloud & The "Code-to-Runtime" Flywheel
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
@@ -261,8 +243,7 @@ graph TD
 │                  ▼                                               │ (Incident Envelope)  │
 │   ┌──────────────────────────────────────────────────────────────┴───────────────────┐  │
 │   │              CODE-TO-RUNTIME ATTRIBUTION & CORRELATION ENGINE                    │  │
-│   │  "PR #142 introduced vulnerable parser -> Container X spawned by Agent Y         │  │
-│   │   attempted unauthorized /etc/shadow access via that exact call path"            │  │
+│   │  Commit SHA -> CI Build -> Image Digest -> Container -> AI Agent -> Syscall     │  │
 │   └──────────────────────────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────▲──────────────────────────────────────────────┘
                                            │ (API Key: `sentinel_api_token`)
@@ -274,15 +255,14 @@ graph TD
           └───────────────────────────┘         └───────────────────────────┘
 ```
 
-### 3.1 The Incident Intelligence Envelope
-When connected to Sentinel Cloud via API key, Sentinel Runtime does **NOT** stream gigabytes of raw prompt text, private code, or customer proprietary data. Instead, it transmits a compact, sanitized envelope:
+### 5.1 Authenticated Incident Intelligence Envelope
+The cloud bridge derives the organization and tenant **strictly from the authenticated mTLS / API key session credentials**, never trusting client-supplied tenant IDs in the payload.
 
 ```json
 {
   "envelope_version": "1.0.0",
-  "organization_id": "org_enterprise_corp",
-  "host_id": "prod-worker-eu-04",
-  "incident_id": "inc_9921_8812a",
+  "device_id": "dev_worker_linux_eu01",
+  "incident_id": "inc_20261104_0042",
   "timestamp": "2026-11-04T01:30:00.000Z",
   "actor_summary": {
     "actor_type": "AI_AGENT",
@@ -290,41 +270,35 @@ When connected to Sentinel Cloud via API key, Sentinel Runtime does **NOT** stre
     "delegated_by": "user_sre_lead",
     "attribution_confidence": "PROVEN_CRYPTOGRAPHIC"
   },
+  "provenance_chain": {
+    "git_commit": "a1b2c3d4e5f678901234567890abcdef12345678",
+    "ci_job_id": "github_actions_run_991240",
+    "image_digest": "sha256:7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
+    "container_id": "cgroup_slice_worker_42"
+  },
   "violation_details": {
     "rule_id": "SEC-RUL-EXEC-ESCAPE",
     "policy_level": "R3_CONTAINMENT_EXECUTED",
-    "action_taken": "CGROUP_EGRESS_BLOCKED_AND_SIGKILL",
-    "executable_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "action_taken": "CGROUP_KILL_AND_NFTABLES_DROP",
+    "executable_hash_placeholder": "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
     "target_destination": "198.51.100.22:4444"
   },
   "evidence_anchor": {
-    "ledger_record_hash": "a8f5c...921",
-    "root_hash_signature": "ed25519_sig_..."
+    "ledger_record_hash": "a8f5c9213456789abcdef0123456789abcdef0123456789abcdef0123456789a",
+    "root_signature": "ed25519_sig_..."
   }
 }
 ```
 
-### 3.2 The Code-to-Runtime Strategic Advantage
-Competitors either do static code scanning (Snyk, Semgrep) or runtime detection (Sysdig, Falco). Neither connects the two:
-1. **Sentinel CLI & PR Gate** catches vulnerabilities, dependencies, and code flaws during PR reviews.
-2. **Sentinel Runtime** observes live containers and AI agents executing in staging and production.
-3. **The Flywheel:** Sentinel Cloud joins the PR commit hash and container build digest to the runtime execution graph. When an exploit or unauthorized action occurs, Sentinel instantly pinpoints:
-   - Which developer or agent authored the vulnerable code.
-   - Which PR introduced it.
-   - Which runtime agent or attacker attempted to trigger it.
+### 5.2 The Provenance Chain
+For the Code-to-Runtime Flywheel to hold forensic weight, the connection cannot be based solely on a container name. It requires an unbroken chain:
+$$\text{Git Commit SHA} \longrightarrow \text{CI Build Run} \longrightarrow \text{OCI Image Digest} \longrightarrow \text{K8s / Container ID} \longrightarrow \text{cgroup v2} \longrightarrow \text{Tetragon Syscall}$$
 
-### 3.3 Commercial Bundling Model
-- **Community Edition (Open Core):** 100% free, runs air-gapped, unlimited local events, local SQLite ledger, local CLI containment.
-- **Enterprise Subscription (Annual Bundle):**
-  - Sentinel Cloud SaaS control plane.
-  - Code-to-Runtime correlation linking PR audits to production hosts.
-  - Multi-host centralized activity graph.
-  - External WORM evidence anchoring (S3 Object Lock + compliance retention).
-  - SLA & Enterprise support.
+When a vulnerability flagged in a PR review is attacked at runtime, Sentinel Cloud correlates the exact Git commit and author with the kernel process blocked by Sentinel Runtime.
 
 ---
 
-## 4. Build vs. Buy / Ecosystem Reuse Matrix
+## 6. Build vs. Buy / Ecosystem Reuse Matrix
 
 | Subsystem / Layer | Strategy | Reused Technology | Proprietary Sentinel IP | Architecture Rationale |
 |---|---|---|---|---|
@@ -333,18 +307,18 @@ Competitors either do static code scanning (Snyk, Semgrep) or runtime detection 
 | **Local Storage** | **REUSE** | SQLite (`node:sqlite`) | Hash-chain integrity logic | Embedded, ACID, zero-maintenance, crash-safe. |
 | **Agent Protocols** | **REUSE** | Model Context Protocol (MCP) | Identity & span correlation | Fast-growing open standard for LLM tool use. |
 | **Cloud Storage** | **REUSE** | AWS S3 Object Lock / MinIO | Dossier packager & signer | Built-in compliance WORM; no need to build bespoke storage clouds. |
-| **Event Contract v2** | **BUILD** | JSON Schema Draft 2020-12 | Contract schemas & validators | Core IP: explicit loss domains, cryptographic event keys, zero-loss raw wire retention. |
+| **Event Contract v2** | **BUILD** | JSON Schema Draft 2020-12 | Contract schemas & validators | Core IP: explicit loss domains, cryptographic event keys, exact received-payload retention. |
 | **Hybrid Identity Engine** | **BUILD** | None (Novel domain) | Attribution & delegation engine | Core IP: linking Human $\leftrightarrow$ AI Agent $\leftrightarrow$ Kernel execution. |
 | **Activity Graph** | **BUILD** | None (Custom DAG) | Causal graph & time-window LRU | Core IP: deterministic cross-domain causal correlation. |
-| **Autonomous Containment**| **BUILD** | Linux cgroups / nftables | Graduated response engine (R0-R4) | Core IP: deterministic, safe, automated defense without kernel panics. |
+| **Autonomous Containment**| **BUILD** | Linux cgroup.kill / pidfd / nftables | Graduated response engine (R0-R4) | Core IP: deterministic, safe, automated defense without kernel panics. |
 
 ---
 
-## 5. Competitor Capability & Differentiator Matrix
+## 7. Competitor Capability & Differentiator Matrix
 
 *Classification Legend:*
-- **VERIFIED:** Confirmed in official product documentation and production code.
-- **NOT_DOCUMENTED:** Product documentation does not describe or claim this capability.
+- **VERIFIED:** Confirmed in official product documentation and source code.
+- **NOT_DOCUMENTED:** Product documentation does not claim or describe this capability.
 - **NOT_TESTED:** Architectural claim not independently verified in our test environment.
 
 | Capability | Cilium Tetragon | Falco | Sysdig Secure | Datadog CWP | **Sentinel Runtime + Cloud** |
@@ -352,7 +326,7 @@ Competitors either do static code scanning (Snyk, Semgrep) or runtime detection 
 | **Kernel Sensor** | Native eBPF (`VERIFIED`) | eBPF (`VERIFIED`) | Agent + eBPF (`VERIFIED`) | Agent + eBPF (`VERIFIED`) | **Reuses Tetragon eBPF** (`VERIFIED`) |
 | **AI Agent / MCP Attribution**| `NOT_DOCUMENTED` | `NOT_DOCUMENTED` | `NOT_DOCUMENTED` | `NOT_DOCUMENTED` | **Native Attribution Engine** (`BUILD`) |
 | **Deterministic Causal DAG** | Process tree only (`VERIFIED`)| `NOT_DOCUMENTED` | Proprietary SaaS (`VERIFIED`)| Proprietary SaaS (`VERIFIED`)| **Local Open Causal Graph** (`BUILD`) |
-| **Original Wire Byte Retention**| Deserializes (`VERIFIED`) | Drops frames (`VERIFIED`) | Cloud-ingested (`VERIFIED`) | Cloud-ingested (`VERIFIED`) | **Exact Protobuf Wire Retention** (`VERIFIED`) |
+| **Received Wire Retention** | Deserializes (`VERIFIED`) | Drops frames (`VERIFIED`) | Cloud-ingested (`VERIFIED`) | Cloud-ingested (`VERIFIED`) | **Exact Wire Retention + Loss Gap** (`VERIFIED`) |
 | **Cryptographic Event Keys** | `NOT_DOCUMENTED` | `NOT_DOCUMENTED` | UUIDv4 (`VERIFIED`) | Log IDs (`VERIFIED`) | **Domain-Separated SHA-256 Keys** (`VERIFIED`) |
 | **Loss & Gap Honesty** | Metric counters (`VERIFIED`) | Drops reported (`VERIFIED`)| Backend estimate (`VERIFIED`)| Backend estimate (`VERIFIED`)| **Explicit Loss Domains (Gap=UNKNOWN)** (`VERIFIED`) |
 | **Tamper-Evident Ledger** | `NOT_DOCUMENTED` | `NOT_DOCUMENTED` | SaaS custody (`VERIFIED`) | SaaS custody (`VERIFIED`) | **Local SQLite Hash Chain** (`VERIFIED`) |
@@ -361,9 +335,7 @@ Competitors either do static code scanning (Snyk, Semgrep) or runtime detection 
 
 ---
 
-## 6. Single End-to-End MVP Scenario: "The Rogue Coding Agent"
-
-To validate the architecture, Phase 001 and Phase 002 must successfully execute this single end-to-end scenario:
+## 8. Single End-to-End MVP Scenario: "The Rogue Coding Agent"
 
 ```
 SCENARIO SUMMARY:
@@ -376,13 +348,13 @@ SCENARIO SUMMARY:
 - [ ] **Provenance:** Raw Tetragon protobuf bytes for `execve` and `connect` are preserved in the pre-ingest journal with valid SHA-256 wire hash.
 - [ ] **Attribution:** The engine attributes `curl` to `AI_AGENT:refactor-bot` delegated by `HUMAN:alice`, with confidence `OBSERVED_CORRELATED`.
 - [ ] **Detection:** The policy engine flags `/etc/shadow` read and external socket connection as `POLICY_VIOLATION`.
-- [ ] **Response:** Engine executes Level R3 containment: terminates the offending process subtree and drops cgroup network egress.
+- [ ] **Transaction Order:** `ACTION_PLANNED` is written to the ledger before dispatch; containment executed via `cgroup.kill` and `nftables`; `ACTION_CONFIRMED` recorded.
 - [ ] **Evidence:** SQLite ledger commits the event chain with unbroken cryptographic hash links.
 - [ ] **Cloud Bridge:** If connected, transmits a sanitized Incident Intelligence Envelope to Sentinel Cloud; if air-gapped, completes 100% of the defense locally.
 
 ---
 
-## 7. Criteria for "Engine Complete" (Stop Conditions for Local MVP)
+## 9. Criteria for "Engine Complete" (Stop Conditions for Local MVP)
 
 The Sentinel Runtime Local Engine v1 is declared **COMPLETE** when all 6 gates are closed:
 
@@ -395,13 +367,13 @@ The Sentinel Runtime Local Engine v1 is declared **COMPLETE** when all 6 gates a
 - [ ] **Gate 4: Hybrid Attribution & MCP Gate (`HYBRID-ATTRIBUTION-V1`)**  
   OTel GenAI / MCP receiver correlates tool calls to kernel processes; non-correlated actions strictly marked `UNKNOWN`.
 - [ ] **Gate 5: Autonomous Containment & Dossier Gate (`CONTAINMENT-EVIDENCE-V1`)**  
-  Levels R0–R3 verified in offline environment; `export-dossier` packages verifiable evidence; `verify-ledger` flags tampering.
+  Levels R0–R3 verified in offline environment with pidfd / cgroup.kill; `export-dossier` packages verifiable evidence; `verify-ledger` flags tampering.
 - [ ] **Gate 6: Native Linux Deployment Gate (`DEPLOYMENT-V1`)**  
-  Systemd units verified with socket permissions `0660`; package builds on Ubuntu 22.04 and 24.04 LTS; 100% test pass on native Linux.
+  Systemd units verified with socket permissions `0660` for reader and `0600` for privileged enforcer; package builds on Ubuntu 22.04 and 24.04 LTS; 100% test pass on native Linux.
 
 ---
 
-## 8. Prioritized Roadmap
+## 10. Prioritized Roadmap
 
 ```
 PHASE 001C (DONE)       ──▶ Event Contract v2 Candidate Published & CI Verified (226/226 Linux Pass)
@@ -420,4 +392,4 @@ PHASE 005               ──▶ Sentinel Cloud Fleet Integration (API Key, Env
 ```
 
 **Instruction for Engineering Agents:**  
-Do NOT deviate from the scope defined in this specification. Do NOT begin Phase 001D implementation without an authorized TracingPolicy test plan. Do NOT implement bespoke in-memory alerting firehoses or closed SaaS dependencies.
+Do NOT begin Phase 001D or Response Engine implementation without an authorized TracingPolicy test plan. Do NOT implement bespoke in-memory alerting firehoses or closed SaaS dependencies.
