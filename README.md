@@ -131,6 +131,52 @@ The JSONL command consumes an exported file and writes validated v2 objects for 
 
 Optional `--metrics-url` starts a Prometheus poller only after gRPC has verified the sensor reports v1.8.0. Plain HTTP is restricted to loopback; HTTPS uses verified server TLS and can use a client certificate. The collector hashes exact response bytes, caps responses at 4 MiB, and atomically commits metrics events with the poll checkpoint. It reads five pinned v1.8.0 loss counters: kernel ring-buffer loss, BPF send misses, listener overflow, field-filter drops, and observer queue drops. Counter deltas require the same observed `process_start_time_seconds`; process/counter resets and missing telemetry remain unknown. Aggregation-buffer drops are `NOT_APPLICABLE` while Sentinel requests no Tetragon aggregation. If aggregation is enabled later, that domain needs a counter before it can be reported as measured. Sentinel's gRPC gap, local queue, parser, and storage domains are not inferred from this endpoint. The non-Kubernetes Tetragon metrics server is disabled by default; enable it on loopback before using this option. Both `host-id` and `boot-id` are required trusted values from the monitored host; the runtime does not guess them from the collector's machine.
 
+
+## Sentinel Cloud connection (optional)
+
+Sentinel Runtime can report incidents and send heartbeats to Sentinel Cloud when a `snt_rt_` API key is configured. All cloud features are optional — the engine operates fully offline and air-gapped without them.
+
+### Prerequisites
+
+- An active Sentinel Production subscription (annual plan).
+- A Runtime host token generated from the Sentinel Cloud admin panel (Runtime Fleet tab).
+
+### Configuration
+
+Set the environment variable before starting the runtime daemon:
+
+```bash
+export SENTINEL_RUNTIME_API_KEY="snt_rt_<your-token>"
+export SENTINEL_RUNTIME_API_URL="https://your-sentinel-cloud-instance.com"  # optional override
+```
+
+Or pass it at startup:
+
+```bash
+SENTINEL_RUNTIME_API_KEY="snt_rt_..." node bin/sentinel-runtime.js ingest-tetragon ...
+```
+
+### Token isolation
+
+Runtime tokens (`snt_rt_` prefix) are stored and authenticated separately from CLI tokens (`sntl_`). A runtime token cannot authenticate on scan, billing, or admin endpoints. A CLI token is explicitly rejected on runtime endpoints.
+
+### Offline resilience
+
+If Sentinel Cloud is unreachable, the cloud client buffers the incident envelope and continues. The local engine and SQLite evidence ledger continue to operate normally. Reconnection is automatic on the next report cycle.
+
+### Module usage
+
+```js
+const { SentinelRuntimeCloudClient } = require('./src/cloud/cloud-client');
+
+const client = new SentinelRuntimeCloudClient({
+  apiKey: process.env.SENTINEL_RUNTIME_API_KEY,
+  apiUrl: process.env.SENTINEL_RUNTIME_API_URL,
+});
+
+await client.sendHeartbeat({ hostId: 'host-prod-01', status: 'healthy' });
+await client.sendIncidentEnvelope({ hostId: 'host-prod-01', incidents: [...] });
+```
 ## Workload profile format
 
 The engine API accepts profiles using exact absolute binary paths or SHA-256 digests. Bare executable names such as `node` are rejected. Network entries can be exact hostnames, `host:port`, or IPv4 CIDRs.
