@@ -10,5 +10,7 @@ module.exports = {
   ...require('./contracts/materialize-tetragon-v2'),
   ...require('./contracts/event-keys'),
   ...require('./ingest/jsonl'),
-  ...require('./adapters/tetragon-json')
+  ...require('./adapters/tetragon-json'),
+  ...require('./containment'),
+  ...require('./cloud/cloud-client')
 };
