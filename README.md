@@ -1,11 +1,34 @@
-# Sentinel Runtime
+# Sentinel Runtime: eBPF Workload Security & Process Lineage Verification
 
 [![CI](https://github.com/javier20dev25/sentinel-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/javier20dev25/sentinel-runtime/actions/workflows/ci.yml)
 [![License: BUSL-1.1](https://img.shields.io/badge/License-BUSL--1.1-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22.5.0-brightgreen)](package.json)
+[![eBPF: Cilium Tetragon v1.8](https://img.shields.io/badge/eBPF-Cilium%20Tetragon%20v1.8-purple.svg)](https://tetragon.io)
+[![Event Contract: v2](https://img.shields.io/badge/Event%20Contract-v2%20Candidate-orange.svg)](docs/specs/SENTINEL_RUNTIME_ENGINE_V1_SPEC.md)
 
-Sentinel Runtime is an early-stage, local event processor for Linux workload telemetry. It correlates process behavior, validates Sentinel event contracts, and records an auditable evidence trail. The current implementation is **observe-only**: it does not suspend, kill, isolate, or block a host process.
+**Sentinel Runtime** is a verifiable runtime security, process behavioral correlation, and tamper-evident audit ledger for Linux and Kubernetes workloads. It ingests eBPF telemetry from [Cilium Tetragon](https://tetragon.io), validates telemetry against formal event contracts (Event Contract v2), tracks process execution lineage across fork/exec/exit boundaries, and anchors cryptographic evidence trails in an immutable SQLite hash chain.
 
+The current implementation is **observe-only**: it does not suspend, kill, isolate, or block a host process.
+
+
+## Architectural Comparison: Sentinel Runtime vs. Cilium Tetragon, Falco & Sysdig
+
+When evaluating runtime security tools for Linux and Kubernetes environments, teams frequently compare **Cilium Tetragon**, **Falco**, and **Sysdig**. Sentinel Runtime occupies a complementary, contract-first layer above raw sensors:
+
+| Capability | Cilium Tetragon | Falco (CNCF) | Sysdig Secure | Sentinel Runtime |
+|---|---|---|---|---|
+| **Primary Role** | In-kernel eBPF sensor & enforcement | Rule-based syscall anomaly detection | Commercial runtime & cloud security | Verifiable process lineage & evidence custody |
+| **Architecture** | Kernel eBPF probes + user-space daemon | Kernel module / eBPF + rule engine | Agent + SaaS control plane | Local correlation engine + tamper-evident chain |
+| **Event Contract** | Protobuf / JSON (sensor-specific) | Falco JSON / gRPC stream | Proprietary telemetry format | Strictly validated Event Contract v1 & v2 schemas |
+| **Process Lineage** | `exec_id` tracking (sensor-scoped) | Syscall-correlated PID tracking | Agent-correlated container trees | Deterministic `host_id + boot_id + exec_id` state machine |
+| **PID Reuse Defense** | Handled via kernel exec identity | Susceptible to rapid PID recycling | Agent-side correlation | Cryptographic event keys with domain-separated UTF-8 lengths |
+| **Evidence Custody** | Standard syslog / JSON logs | Syslog / Webhook / File alerts | Cloud SaaS storage | Tamper-evident SHA-256 SQLite hash chain on-host |
+| **Loss Transparency** | BPF ring buffer loss counters | Drops logged if buffer fills | Dropped events accounted by agent | Measured loss counters required for provenance certification |
+| **Air-Gap Capable** | Yes (local sensor) | Yes (local daemon) | No (requires SaaS connectivity) | 100% Autonomous & Air-Gap Capable |
+| **Cloud Synergy** | Cilium / Hubble integration | CNCF ecosystem plugins | Native SaaS dashboard | Zero-knowledge cloud fleet intel (optional `snt_rt_` API key) |
+
+> **Why Sentinel Runtime alongside Tetragon or Falco?**  
+> Tetragon is an extraordinary low-level eBPF sensor, and Falco provides extensive community rule engines. However, enterprise compliance, regulatory audits, and forensic investigation require **verifiable contracts**, **tamper-evident evidence chains**, and **deterministic process state machines**. Sentinel Runtime acts as the trust and arbitration layer: it consumes Tetragon's raw eBPF telemetry, normalizes it through strict contracts, and guarantees that incident evidence cannot be silently rewritten or repudiated. Read the detailed [Tetragon, Falco & Sentinel Architecture Comparison](docs/COMPARISON_TETRAGON_FALCO_SYSDIG.md).
 ## What works today
 
 - Deterministic process correlation keyed by `host_id + boot_id + exec_id`, with time-window expiry, duplicate suppression, and bounded in-memory state.
@@ -134,7 +157,7 @@ Optional `--metrics-url` starts a Prometheus poller only after gRPC has verified
 
 ## Sentinel Cloud connection (optional)
 
-Sentinel Runtime can report incidents and send heartbeats to Sentinel Cloud when a `snt_rt_` API key is configured. All cloud features are optional � the engine operates fully offline and air-gapped without them.
+Sentinel Runtime can report incidents and send heartbeats to Sentinel Cloud when a `snt_rt_` API key is configured. All cloud features are optional â€” the engine operates fully offline and air-gapped without them.
 
 ### Prerequisites
 
@@ -217,9 +240,9 @@ docs/IMPLEMENTATION_STATUS.md    implemented scope and production gates
 
 This repository is an early-stage, observe-only runtime published as an **unapproved development candidate (Phase 001C)**. It is **not** enterprise-ready, production-certified, or fully validated:
 
-- **Test suite results:** 226 total tests — **224 passed, 2 skipped** (Linux-only tests for TLS client key permissions and read-only Unix proxy) on Windows.
+- **Test suite results:** 226 total tests Ã¢â‚¬â€ **224 passed, 2 skipped** (Linux-only tests for TLS client key permissions and read-only Unix proxy) on Windows.
 - **Linux execution status:** Under the local host environment, WSL2 invokes Windows `node.exe` through binary interop (`process.platform === 'win32'`); it does not constitute native Linux validation. Native Linux validation (`process.platform === 'linux'`) remains pending native guest Node.js provisioning or GitHub Actions CI execution.
-- **Contract status:** Event Contract v1 is frozen (`8c58cd96...`). Event Contract v2 is an unapproved candidate (`40ff2d68...`). Profile D (`RAW_PARTIAL_PROCESS_EVENT`) remains `PROVISIONAL — REQUIRES NORMATIVE REVIEW`. The provenance matrix status is `REOPENED — BLOCKED`.
+- **Contract status:** Event Contract v1 is frozen (`8c58cd96...`). Event Contract v2 is an unapproved candidate (`40ff2d68...`). Profile D (`RAW_PARTIAL_PROCESS_EVENT`) remains `PROVISIONAL Ã¢â‚¬â€ REQUIRES NORMATIVE REVIEW`. The provenance matrix status is `REOPENED Ã¢â‚¬â€ BLOCKED`.
 - **Sensor telemetry:** Exploratory observations (`tcp_sendmsg` and `cap_capable` on one Tetragon v1.8.0 WSL2 kernel) are micro-benchmark checks under `scripts/manual/` and do NOT constitute formal L3 sensor evidence. Phases 001D (live sensor validation) and 001E (durable queue architecture) are not started and remain unauthorized.
 - **Deployment & Gateway limits:** The read-only proxy filters downstream RPCs to `GetVersion` and `GetEvents` while preserving exact upstream protobuf bytes, but the proxy process itself requires privileged upstream socket access. Installation compatibility of the systemd unit templates across production Linux distributions is not yet established. Enterprise rollout still requires managed install/upgrade, fleet health monitoring, external ledger signing/anchoring, key custody, tenant RBAC, and signed policy distribution. Active enforcement is not implemented.
 - **License:** Licensed under Business Source License 1.1 (BUSL-1.1).

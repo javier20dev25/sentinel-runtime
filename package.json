@@ -1,10 +1,18 @@
 {
   "name": "sentinel-runtime",
   "version": "0.1.0",
-  "description": "Observe-only runtime event ingestion, behavioral correlation, and tamper-evident local evidence for Sentinel",
+  "description": "Verifiable runtime security & behavioral correlation engine for Linux and Kubernetes workloads. Ingests Cilium Tetragon eBPF telemetry, Falco-compatible events, validates Event Contract v2, and records cryptographic tamper-evident evidence ledgers.",
   "main": "src/index.js",
   "bin": {
     "sentinel-runtime": "./bin/sentinel-runtime.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/javier20dev25/sentinel-runtime.git"
+  },
+  "homepage": "https://github.com/javier20dev25/sentinel-runtime#readme",
+  "bugs": {
+    "url": "https://github.com/javier20dev25/sentinel-runtime/issues"
   },
   "scripts": {
     "test": "node --test test/engine.test.js test/contracts/event-contract.test.js test/contracts/event-contract-v2.test.js test/contracts/tetragon-materializer.test.js test/runtime-hardening.test.js test/adapters/tetragon-kprobe.test.js test/collectors/tetragon-grpc.test.js test/collectors/tetragon-metrics.test.js test/collectors/tetragon-readonly-proxy.test.js",
@@ -12,13 +20,28 @@
     "lab:exfil": "node labs/02-data-exfil/run-lab.js"
   },
   "keywords": [
-    "sentinel",
-    "runtime-security",
+    "tetragon",
+    "cilium-tetragon",
+    "tetragon-alternative",
+    "falco",
+    "falco-security",
+    "sysdig",
+    "tracee",
+    "aquasec",
     "ebpf",
-    "tetragon-events",
+    "ebpf-security",
+    "runtime-security",
+    "linux-security",
+    "kubernetes-security",
+    "container-security",
+    "process-lineage",
     "behavioral-analysis",
-    "event-provenance",
-    "evidence-ledger"
+    "tamper-evident",
+    "evidence-ledger",
+    "auditd-alternative",
+    "event-contracts",
+    "sentinel",
+    "zero-trust"
   ],
   "author": "javier20dev25",
   "license": "BUSL-1.1",
