@@ -8,7 +8,9 @@
 
 **Sentinel Runtime** is a verifiable runtime security, process behavioral correlation, and tamper-evident audit ledger for Linux and Kubernetes workloads. It ingests eBPF telemetry from [Cilium Tetragon](https://tetragon.io), validates telemetry against formal event contracts (Event Contract v2), tracks process execution lineage across fork/exec/exit boundaries, and anchors cryptographic evidence trails in an immutable SQLite hash chain.
 
-The current implementation is **observe-only**: it does not suspend, kill, isolate, or block a host process.
+Sentinel Runtime provides deterministic runtime behavioral correlation, complex event processing (CEP), streaming anomaly detection, and tamper-evident audit ledger capabilities for Linux and Kubernetes workloads. It ingests eBPF telemetry from [Cilium Tetragon](https://tetragon.io), validates telemetry against formal event contracts (Event Contract v2), tracks process execution lineage across fork/exec/exit boundaries, and anchors cryptographic evidence trails in an immutable SQLite hash chain.
+
+The engine operates by default in **observe-only** mode (R1) with strict attribution gates. Active containment (R2–R4) requires explicit opt-in policy authorization and verified process lineage.
 
 
 ## Architectural Comparison: Sentinel Runtime vs. Cilium Tetragon, Falco & Sysdig
@@ -42,8 +44,14 @@ When evaluating runtime security tools for Linux and Kubernetes environments, te
 - The production v2 validator recomputes and verifies domain-separated event keys, requires provenance for measured loss counters, enforces canonical uint64 decimal strings without `Number` precision loss, and separates `FILE_BYTES` from `GRPC_SEQUENCE` cursors.
 - SQLite evidence records linked with a SHA-256 hash chain, full synchronous commits, and an integrity verifier.
 - Automated baseline discovery via `learn-profile` that synthesizes hardened `WorkloadProfile` definitions from observed Tetragon JSONL activity.
+- Real-time Threat Intelligence Engine with zero external runtime dependencies:
+  - Complex Event Processing (CEP) and sliding-window Finite State Machine (`SequenceDetector`) tracking multi-step attack sequences across time (e.g. sensitive credential access followed by network egress, outbound reverse shells, privilege escalation attempts).
+  - Online streaming anomaly detection (`AnomalyEngine`) using Exponentially Weighted Moving Average (EWMA) and Cumulative Sum (CUSUM) control charts operating in $O(1)$ constant time with zero floating-point accumulation drift.
+  - Multi-signal Behavioral Fusion (`BehaviorEngine`) combining deterministic policy allowlists, CEP state machines, and statistical drift metrics.
+  - Automated Decision Engine (`DecisionEngine`) scoring threats, computing decision confidence, and orchestrating policy-authorized containment actions.
+- Containment & Response Dispatcher (`ContainmentDispatcher`) supporting graduated containment levels (R1 Observe Only, R2 Process Suspension via `SIGSTOP`, R3 Process Termination via `SIGKILL`, R4 Container/Network Isolation) with strict transactional pre-commitment (`ACTION_PLANNED` committed to the SQLite hash chain prior to signal dispatch) and strict attribution gates that prevent destructive actions against Profile D or unverified identities.
 - Cryptographic chain custody and forensic bundle export (`export-custody`, `verify-custody`) with immutable SHA-256 / HMAC manifests for external audit and incident response.
-- Response & containment engine (`ContainmentDispatcher`) with strict transactional pre-commitment (`ACTION_PLANNED` committed before signal delivery) and attribution safety gates that block destructive actions against unverified or Profile D PIDs.
+- Automated baseline discovery via `learn-profile` that synthesizes hardened `WorkloadProfile` definitions from observed Tetragon JSONL activity.
 
 ## Explicit product limits
 

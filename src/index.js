@@ -14,5 +14,6 @@ module.exports = {
   ...require('./containment'),
   ...require('./cloud/cloud-client'),
   ...require('./custody'),
-  ...require('./profiling')
+  ...require('./profiling'),
+  ...require('./intelligence')
 };
