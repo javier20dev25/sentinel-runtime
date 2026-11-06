@@ -16,6 +16,8 @@ const { TetragonMetricsCollector, validateMetricsPeer } = require('../src/collec
 const { startTetragonReadOnlyProxy } = require('../src/collectors/tetragon-readonly-proxy');
 const { WorkloadProfile } = require('../src/profiler');
 const { ThreatLevel } = require('../src/types');
+const { ForensicExporter } = require('../src/custody');
+const { ProfileLearner } = require('../src/profiling');
 
 const DEFAULT_COLLECTOR_ADDRESS = 'unix:///run/sentinel-runtime/tetragon-readonly.sock';
 
@@ -31,6 +33,9 @@ async function main(argv = process.argv.slice(2)) {
     case 'ingest-tetragon': return ingestTetragonCommand(options);
     case 'collect-tetragon': return collectTetragonCommand(options);
     case 'tetragon-readonly-proxy': return tetragonReadOnlyProxyCommand(options);
+        case 'export-custody': return exportCustodyCommand(options);
+    case 'verify-custody': return verifyCustodyCommand(options);
+    case 'learn-profile': return learnProfileCommand(options);
     case 'demo': return runSafeDemo();
     default:
       console.error(`Unknown command: ${command}`);
@@ -92,7 +97,7 @@ function resolveBootId(options) {
 
 function showHelp() {
   console.log(`
-Sentinel Runtime — local behavioral event processor (observe-only)
+Sentinel Runtime â€” local behavioral event processor (observe-only)
 
 Commands:
   status                                      Show implemented capabilities and limits
@@ -116,6 +121,12 @@ Commands:
                                                Expose only GetVersion and GetEvents through a protected Unix socket
   verify-ledger [--db <path>]                 Verify the local evidence hash chain
   audit-log [--db <path>] [--limit <n>]         Show recent records after integrity check
+  export-custody --out-dir <dir> [--db <path>] [--host-id <id>] [--boot-id <id>]
+                                               Export immutable, certified evidence bundle with SHA-256 manifest
+  verify-custody --manifest <custody-manifest.json> [--db <evidence.sqlite>]
+                                               Independently verify forensic integrity of an exported evidence bundle
+  learn-profile --input <file.jsonl> [--name <workload_id>] [--out <profile.json>]
+                                               Synthesize hardened WorkloadProfile from observed JSONL event baseline
   demo                                        Run an in-memory, non-destructive example
 
 Tetragon ingestion writes validated Event Contract v2 objects for PROCESS_EXEC, PROCESS_EXIT,
@@ -204,7 +215,7 @@ function verifyLedgerCommand(options) {
 function auditLogCommand(options) {
   const dbPath = options.db || defaultDbPath();
   if (!fs.existsSync(dbPath)) {
-    console.log(`No hay registros todavía en ${dbPath}`);
+    console.log(`No hay registros todavÃ­a en ${dbPath}`);
     return 0;
   }
   const ledger = new EvidenceLedger(dbPath);
@@ -577,6 +588,51 @@ function readJsonFile(filePath) {
 
 function sha256(value) { return crypto.createHash('sha256').update(value).digest('hex'); }
 
+function exportCustodyCommand(options) {
+  const dbPath = options.db || defaultDbPath();
+  const outDir = options.outDir || options.outdir;
+  if (!outDir) throw new Error('--out-dir is required for export-custody');
+
+  const result = ForensicExporter.exportBundle({
+    dbPath,
+    outDir: path.resolve(outDir),
+    hostId: options.hostId || options.host || 'unassigned-host',
+    bootId: options.bootId || options.boot || 'unassigned-boot',
+    signingKey: options.signKey || options.signingKey || null
+  });
+
+  console.log(JSON.stringify(result, null, 2));
+  return 0;
+}
+
+function verifyCustodyCommand(options) {
+  const manifestPath = options.manifest;
+  if (!manifestPath) throw new Error('--manifest is required for verify-custody');
+
+  const result = ForensicExporter.verifyBundle(path.resolve(manifestPath), options.db ? path.resolve(options.db) : null);
+  console.log(JSON.stringify(result, null, 2));
+  return result.certified ? 0 : 1;
+}
+
+async function learnProfileCommand(options) {
+  const input = requireOption(options, 'input');
+  const workloadId = options.name || options.workloadId || 'learned-workload';
+  const outPath = options.out || options.output || `${workloadId}-profile.json`;
+
+  const learner = new ProfileLearner({ workloadId });
+  const profile = await learner.learnFromJsonl(path.resolve(input));
+
+  fs.writeFileSync(path.resolve(outPath), JSON.stringify(profile, null, 2) + '\n', 'utf8');
+  console.log(JSON.stringify({
+    learned: true,
+    workloadId: profile.workload_id,
+    eventsAnalyzed: profile.events_analyzed,
+    allowedBinariesCount: profile.allowed_binaries.length,
+    allowedNetworkCount: profile.allowed_network_destinations.length,
+    savedTo: path.resolve(outPath)
+  }, null, 2));
+  return 0;
+}
 function runSafeDemo() {
   const engine = new BehavioralSequenceEngine();
   const event = {

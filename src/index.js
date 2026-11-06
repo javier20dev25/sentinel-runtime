@@ -12,5 +12,7 @@ module.exports = {
   ...require('./ingest/jsonl'),
   ...require('./adapters/tetragon-json'),
   ...require('./containment'),
-  ...require('./cloud/cloud-client')
+  ...require('./cloud/cloud-client'),
+  ...require('./custody'),
+  ...require('./profiling')
 };

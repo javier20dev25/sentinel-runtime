@@ -41,6 +41,9 @@ When evaluating runtime security tools for Linux and Kubernetes environments, te
 - Event Contract v1 validator is frozen (SHA-256: `8c58cd9661eb3e192d89a3480572486fd96fe24f5bdb3219e3053a807515cfe9`). Event Contract v2 candidate (SHA-256: `40ff2d683cb3efd81376cc136af6e4d8afc0ea4d934a9745dec4f2c479a838fa`) provides strict validation for RAW (Profile A), DERIVED (Profile B), SYNTHETIC (Profile C), and provisional RAW_PARTIAL (Profile D) keys. v2 remains an unapproved candidate; schema conformance does not authenticate the sensor.
 - The production v2 validator recomputes and verifies domain-separated event keys, requires provenance for measured loss counters, enforces canonical uint64 decimal strings without `Number` precision loss, and separates `FILE_BYTES` from `GRPC_SEQUENCE` cursors.
 - SQLite evidence records linked with a SHA-256 hash chain, full synchronous commits, and an integrity verifier.
+- Automated baseline discovery via `learn-profile` that synthesizes hardened `WorkloadProfile` definitions from observed Tetragon JSONL activity.
+- Cryptographic chain custody and forensic bundle export (`export-custody`, `verify-custody`) with immutable SHA-256 / HMAC manifests for external audit and incident response.
+- Response & containment engine (`ContainmentDispatcher`) with strict transactional pre-commitment (`ACTION_PLANNED` committed before signal delivery) and attribution safety gates that block destructive actions against unverified or Profile D PIDs.
 
 ## Explicit product limits
 
@@ -131,6 +134,22 @@ node bin/sentinel-runtime.js verify-ledger --db /var/lib/sentinel/runtime.sqlite
 # Inspect recent ledger records after integrity verification
 node bin/sentinel-runtime.js audit-log --db /var/lib/sentinel/runtime.sqlite --limit 1000
 
+# Export immutable, certified evidence bundle with SHA-256 manifest for forensic custody
+node bin/sentinel-runtime.js export-custody \
+  --db /var/lib/sentinel/runtime.sqlite \
+  --out-dir /var/lib/sentinel/exports/incident-2026-11-05 \
+  --host-id host-prod-01 --boot-id "$(cat /proc/sys/kernel/random/boot_id)"
+
+# Independently verify cryptographic integrity of an exported custody bundle
+node bin/sentinel-runtime.js verify-custody \
+  --manifest /var/lib/sentinel/exports/incident-2026-11-05/custody-manifest.json
+
+# Automatically synthesize a hardened WorkloadProfile from an observed JSONL event baseline
+node bin/sentinel-runtime.js learn-profile \
+  --input /var/log/tetragon/baseline-72h.jsonl \
+  --name web-api-service \
+  --out /etc/sentinel/profiles/web-api.json
+
 # Run the bounded, deterministic offline ingestion benchmark against a pinned HEAD SHA
 node bench/runtime-ingest.js --revision <40-hex-git-sha> --events 2000 --warmup 250 --repetitions 3 --batch-size 128 --output bench/results/SR-INGEST-001.json
 node bench/runtime-ingest.js --verify bench/results/SR-INGEST-001.json
@@ -157,7 +176,7 @@ Optional `--metrics-url` starts a Prometheus poller only after gRPC has verified
 
 ## Sentinel Cloud connection (optional)
 
-Sentinel Runtime can report incidents and send heartbeats to Sentinel Cloud when a `snt_rt_` API key is configured. All cloud features are optional â€” the engine operates fully offline and air-gapped without them.
+Sentinel Runtime can report incidents and send heartbeats to Sentinel Cloud when a `snt_rt_` API key is configured. All cloud features are optional Ã¢â‚¬â€ the engine operates fully offline and air-gapped without them.
 
 ### Prerequisites
 
@@ -240,9 +259,9 @@ docs/IMPLEMENTATION_STATUS.md    implemented scope and production gates
 
 This repository is an early-stage, observe-only runtime published as an **unapproved development candidate (Phase 001C)**. It is **not** enterprise-ready, production-certified, or fully validated:
 
-- **Test suite results:** 226 total tests Ã¢â‚¬â€ **224 passed, 2 skipped** (Linux-only tests for TLS client key permissions and read-only Unix proxy) on Windows.
+- **Test suite results:** 226 total tests ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â **224 passed, 2 skipped** (Linux-only tests for TLS client key permissions and read-only Unix proxy) on Windows.
 - **Linux execution status:** Under the local host environment, WSL2 invokes Windows `node.exe` through binary interop (`process.platform === 'win32'`); it does not constitute native Linux validation. Native Linux validation (`process.platform === 'linux'`) remains pending native guest Node.js provisioning or GitHub Actions CI execution.
-- **Contract status:** Event Contract v1 is frozen (`8c58cd96...`). Event Contract v2 is an unapproved candidate (`40ff2d68...`). Profile D (`RAW_PARTIAL_PROCESS_EVENT`) remains `PROVISIONAL Ã¢â‚¬â€ REQUIRES NORMATIVE REVIEW`. The provenance matrix status is `REOPENED Ã¢â‚¬â€ BLOCKED`.
+- **Contract status:** Event Contract v1 is frozen (`8c58cd96...`). Event Contract v2 is an unapproved candidate (`40ff2d68...`). Profile D (`RAW_PARTIAL_PROCESS_EVENT`) remains `PROVISIONAL ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â REQUIRES NORMATIVE REVIEW`. The provenance matrix status is `REOPENED ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â BLOCKED`.
 - **Sensor telemetry:** Exploratory observations (`tcp_sendmsg` and `cap_capable` on one Tetragon v1.8.0 WSL2 kernel) are micro-benchmark checks under `scripts/manual/` and do NOT constitute formal L3 sensor evidence. Phases 001D (live sensor validation) and 001E (durable queue architecture) are not started and remain unauthorized.
 - **Deployment & Gateway limits:** The read-only proxy filters downstream RPCs to `GetVersion` and `GetEvents` while preserving exact upstream protobuf bytes, but the proxy process itself requires privileged upstream socket access. Installation compatibility of the systemd unit templates across production Linux distributions is not yet established. Enterprise rollout still requires managed install/upgrade, fleet health monitoring, external ledger signing/anchoring, key custody, tenant RBAC, and signed policy distribution. Active enforcement is not implemented.
 - **License:** Licensed under Business Source License 1.1 (BUSL-1.1).

@@ -15,7 +15,7 @@
     "url": "https://github.com/javier20dev25/sentinel-runtime/issues"
   },
   "scripts": {
-    "test": "node --test test/engine.test.js test/contracts/event-contract.test.js test/contracts/event-contract-v2.test.js test/contracts/tetragon-materializer.test.js test/runtime-hardening.test.js test/adapters/tetragon-kprobe.test.js test/collectors/tetragon-grpc.test.js test/collectors/tetragon-metrics.test.js test/collectors/tetragon-readonly-proxy.test.js test/cloud/cloud-client.test.js test/containment/containment-dispatcher.test.js",
+    "test": "node --test test/engine.test.js test/contracts/event-contract.test.js test/contracts/event-contract-v2.test.js test/contracts/tetragon-materializer.test.js test/runtime-hardening.test.js test/adapters/tetragon-kprobe.test.js test/collectors/tetragon-grpc.test.js test/collectors/tetragon-metrics.test.js test/collectors/tetragon-readonly-proxy.test.js test/cloud/cloud-client.test.js test/containment/containment-dispatcher.test.js test/custody/forensic-exporter.test.js test/profiling/profile-learner.test.js",
     "lab:proc": "node labs/01-proc-injection/run-lab.js",
     "lab:exfil": "node labs/02-data-exfil/run-lab.js"
   },
