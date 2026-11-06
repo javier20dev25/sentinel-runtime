@@ -10,6 +10,7 @@ const { syntheticObservabilityEventKey, canonicalPayloadSha256 } = require('../c
 const { validateEventV2 } = require('../contracts/validate-event-v2');
 const { WorkloadProfile } = require('../profiler');
 const { ThreatLevel } = require('../types');
+const { BehaviorEngine, DecisionEngine } = require('../intelligence');
 const { getRawResponseBytes, getRawResponseByteLength, loadTetragonApi } = require('./tetragon-proto');
 const { timestampNs } = require('../adapters/tetragon-json');
 
@@ -136,9 +137,19 @@ class TetragonGrpcCollector {
     this.connectionFactory = options.connectionFactory;
     this.onStatus = typeof options.onStatus === 'function' ? options.onStatus : () => {};
     this.engine = options.engine || new BehavioralSequenceEngine();
+    this.behaviorEngine = options.behaviorEngine || null;
+    this.decisionEngine = options.decisionEngine || null;
+    if (options.intelligence && !this.behaviorEngine) {
+      this.behaviorEngine = new BehaviorEngine(options);
+      this.decisionEngine = options.decisionEngine || new DecisionEngine(options);
+    }
     if (options.profiles) {
       for (const [workloadId, config] of Object.entries(options.profiles)) {
-        this.engine.registerProfile(workloadId, new WorkloadProfile(config));
+        const wp = new WorkloadProfile(config);
+        this.engine.registerProfile(workloadId, wp);
+        if (this.behaviorEngine) {
+          this.behaviorEngine.registerProfile(workloadId, wp);
+        }
       }
     }
     this.sourceId = sourceIdForHost(this.hostId, this.bootId);
@@ -530,7 +541,17 @@ class TetragonGrpcCollector {
               continue;
             }
             this.metrics.supported++;
-            const decision = this.engine.processEvent(normalized);
+            let decision;
+            if (this.behaviorEngine) {
+              const analysis = this.behaviorEngine.analyzeEvent(event);
+              if (this.decisionEngine) {
+                decision = await this.decisionEngine.decide(analysis, event);
+              } else {
+                decision = analysis;
+              }
+            } else {
+              decision = this.engine.processEvent(normalized);
+            }
             pushEntry({
               event,
               decision,

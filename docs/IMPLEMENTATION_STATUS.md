@@ -61,6 +61,77 @@ The live gRPC collector checkpoints only the last locally committed receive sequ
 
 The local hash chain detects edits that do not recompute the chain. A privileged host attacker can replace the database and recompute it. Evidence is not independently tamper-proof without an external anchor and protected key custody.
 
+## Milestone L2 — Intelligence Engine Integration and Correctness
+
+**Status:** Unit-tested and integration-tested. Live-sensor-verified: not yet. Production-ready: no.
+
+### What was implemented in this milestone
+
+| Component | File | Status |
+|---|---|---|
+| `SequenceDetector` — FSM/CEP correlation | `src/intelligence/sequence-detector.js` | Unit-tested (tests 1–10) |
+| `AnomalyEngine` — EWMA/CUSUM rates | `src/intelligence/anomaly-engine.js` | Unit-tested (tests 11–14) |
+| `BehaviorEngine` — policy + sequence + anomaly combinator | `src/intelligence/behavior-engine.js` | Unit-tested indirectly via test 17 |
+| `DecisionEngine` — severity classification and strict safety gates | `src/intelligence/decision-engine.js` | Unit-tested (tests 15–17) |
+| `ContainmentDispatcher` — transactional pre-action ledger | `src/containment/containment-dispatcher.js` | Unit-tested (ContainmentDispatcher suite) |
+| gRPC collector integration (`--intelligence` flag) | `src/collectors/tetragon-grpc.js` | Integration-tested (test 17: real gRPC fixture → BehaviorEngine → DecisionEngine → Ledger) |
+| CLI `--intelligence` flag | `bin/sentinel-runtime.js` | Manual smoke only |
+
+### Chain type nomenclature correction
+
+`ChainType.SUSPICIOUS_REVERSE_SHELL` has been renamed to `ChainType.SUSPICIOUS_NETWORK_AND_SHELL` with value `'SUSPICIOUS_NETWORK_AND_SHELL_SEQUENCE'`. The old constant is retained as a backwards-compatible alias. The detection title now explicitly states "socket inheritance unconfirmed" to prevent overclaiming. The chain requires a network connection event to precede an interpreter execution event in strict chronological order; it does not confirm socket descriptor inheritance between the network and shell processes.
+
+### Bounded memory in FSM state
+
+`SequenceDetector` enforces `MAX_STAGES_PER_PROCESS = 32` and `MAX_TRIGGERED_INCIDENTS_PER_PROCESS = 128`. Writes beyond these caps evict the oldest entry (FIFO) before inserting. These caps apply per-process and are independent of the tracker-level capacity limit.
+
+### Baseline status surfacing
+
+`AnomalyEngine.getBaselineStatus(workloadId, now)` returns `'NOT_INITIALIZED'`, `'CALIBRATING'`, or `'WARMED_UP'`. `BehaviorEngine.analyzeEvent()` includes a `baselineStatus` field in its output. During the warm-up window, CUSUM accumulators do not receive input, preventing false CUSUM alerts before a statistical baseline is established.
+
+### Safety invariants (confirmed in source)
+
+- `autoContain` defaults to `false` (`options.autoContain === true` required to enable; `src/intelligence/decision-engine.js` line 14).
+- `dryRun` defaults to `true` (`options.dryRun !== false`; `src/containment/containment-dispatcher.js` line 24).
+- R2 (process suspension) is blocked unless both `allowAutomatedSuspension === true` and `requireHumanApprovalForR2 === false`.
+- R3 (process termination) is blocked unless both `allowAutomatedTermination === true` and `autoContain === true`.
+- Observability degradation blocks all destructive actions regardless of other settings.
+- Statistical anomaly alone produces `R1_OBSERVE_ONLY` only; it cannot escalate to suspension or termination without a sequence or policy match.
+
+### Performance benchmark (Windows host, single-node, in-process)
+
+Measured against 10,000 synthetic events in-process, without live gRPC, SQLite writes, or Tetragon overhead:
+
+| Metric | Value |
+|---|---|
+| Throughput | ~137,248 events/second |
+| p50 latency | ~5 µs |
+| p95 latency | ~10.4 µs |
+| p99 latency | ~30.3 µs |
+| Heap delta (10k events) | ~422 KB |
+
+This benchmark measures the intelligence engine modules only. It does not represent throughput of the full runtime stack with concurrent gRPC reception, SQLite writes, materializer validation, and backpressure.
+
+### Test coverage summary
+
+| Suite | Tests | Pass | Skip | Fail |
+|---|---|---|---|---|
+| SequenceDetector (tests 1–10) | 10 | 10 | 0 | 0 |
+| AnomalyEngine (tests 11–14) | 4 | 4 | 0 | 0 |
+| DecisionEngine (tests 15–17) | 3 | 3 | 0 | 0 |
+| Full suite | 258 | 256 | 2 | 0 |
+
+The two skipped tests require Linux file permission semantics (`chmod`) and are skipped on Windows.
+
+### What is not yet demonstrated
+
+- Live Tetragon sensor connected: the gRPC integration is verified against a loopback fixture server, not a live kernel sensor.
+- Distributed or multi-node FSM state: `SequenceDetector` state is in-process and local to a single node.
+- Production false-positive / false-negative rates: 17 adversarial vectors in a controlled test environment do not constitute production evidence.
+- Live enforcement: `autoContain` and `dryRun` remain at their safe defaults. No process has been suspended or terminated by the engine.
+
+---
+
 ## Production gates
 
 Before enterprise rollout, close and independently review at least these gates:

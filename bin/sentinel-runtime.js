@@ -18,6 +18,7 @@ const { WorkloadProfile } = require('../src/profiler');
 const { ThreatLevel } = require('../src/types');
 const { ForensicExporter } = require('../src/custody');
 const { ProfileLearner } = require('../src/profiling');
+const { BehaviorEngine, DecisionEngine } = require('../src/intelligence');
 
 const DEFAULT_COLLECTOR_ADDRESS = 'unix:///run/sentinel-runtime/tetragon-readonly.sock';
 
@@ -252,11 +253,18 @@ async function ingestTetragonCommand(options) {
   }
   if (options.resume && !checkpointId) throw new Error('--resume requires --checkpoint-id');
   const engine = new BehavioralSequenceEngine();
+  const useIntelligence = options.intelligence === true;
+  const behaviorEngine = useIntelligence ? new BehaviorEngine(options) : null;
+  const decisionEngine = useIntelligence ? new DecisionEngine(options) : null;
   if (options.profiles) {
     const profiles = readJsonFile(options.profiles);
     const profileMap = profiles.profiles || profiles;
     if (!profileMap || typeof profileMap !== 'object' || Array.isArray(profileMap)) throw new Error('Profiles file must contain an object keyed by workload ID');
-    for (const [workloadId, config] of Object.entries(profileMap)) engine.registerProfile(workloadId, new WorkloadProfile(config));
+    for (const [workloadId, config] of Object.entries(profileMap)) {
+      const wp = new WorkloadProfile(config);
+      engine.registerProfile(workloadId, wp);
+      if (behaviorEngine) behaviorEngine.registerProfile(workloadId, wp);
+    }
     if (typeof options.workloadId !== 'string' || !Object.hasOwn(profileMap, options.workloadId)) {
       throw new Error('--profiles requires --workload-id matching an entry in the profiles file');
     }
@@ -334,7 +342,7 @@ async function ingestTetragonCommand(options) {
     pendingRecords.push({ event, decision, evidence });
     if (pendingRecords.length >= batchSize) flushRecords();
   };
-  const processFrames = frames => {
+  const processFrames = async frames => {
     for (const frame of frames) {
       counts.frames++;
       checkpointOffset = frame.byteOffset + frame.byteLength;
@@ -408,7 +416,13 @@ async function ingestTetragonCommand(options) {
         });
         continue;
       }
-      const decision = engine.processEvent(event);
+      let decision;
+      if (useIntelligence) {
+        const analysis = behaviorEngine.analyzeEvent(eventV2);
+        decision = await decisionEngine.decide(analysis, eventV2);
+      } else {
+        decision = engine.processEvent(event);
+      }
       queueRecord(eventV2, decision, {
         inputPath: source.path, byteOffset: frame.byteOffset,
         byteLength: frame.byteLength, payloadByteLength: frame.payloadByteLength,
@@ -417,13 +431,14 @@ async function ingestTetragonCommand(options) {
         tracing_policy_name: event.policyName || null, raw_arguments_preserved: false
       });
       counts.processed++;
-      if (decision.threatLevel === ThreatLevel.UNASSESSED) counts.unassessed++;
-      if (decision.action !== 'RECORD_ONLY') counts.decisions++;
+      if (decision.threatLevel === ThreatLevel.UNASSESSED || decision.threatLevel === 'NORMAL') counts.unassessed++;
+      if (decision.action && decision.action !== 'RECORD_ONLY') counts.decisions++;
+      else if (decision.requestedAction && decision.requestedAction !== 'R1_OBSERVE_ONLY') counts.decisions++;
     }
   };
   try {
-    for await (const chunk of stream) processFrames(framer.push(chunk));
-    processFrames(framer.finish());
+    for await (const chunk of stream) await processFrames(framer.push(chunk));
+    await processFrames(framer.finish());
     if (sourceId) checkpointOffset = source.size;
     flushRecords();
     if (sourceId) {
@@ -485,6 +500,7 @@ async function collectTetragonCommand(options) {
       ledger, hostId, bootId, workloadId: options.workloadId || 'unassigned', profiles: profileMap,
       expectedNodeName: options.expectedNodeName || null, maxEvents,
       captureProcessArguments: options.captureProcessArguments === true,
+      intelligence: options.intelligence === true,
       batchSize: numberOption('batchSize', 128, 1, 4096),
       queueCapacity: numberOption('queueCapacity', 512, 16, 16384),
       queueByteCapacity: numberOption('queueMib', 64, 16, 256) * 1024 * 1024,

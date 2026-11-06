@@ -46,12 +46,11 @@ When evaluating runtime security tools for Linux and Kubernetes environments, te
 - Automated baseline discovery via `learn-profile` that synthesizes hardened `WorkloadProfile` definitions from observed Tetragon JSONL activity.
 - Real-time Threat Intelligence Engine with zero external runtime dependencies:
   - Complex Event Processing (CEP) and sliding-window Finite State Machine (`SequenceDetector`) tracking multi-step attack sequences across time (e.g. sensitive credential access followed by network egress, outbound reverse shells, privilege escalation attempts).
-  - Online streaming anomaly detection (`AnomalyEngine`) using Exponentially Weighted Moving Average (EWMA) and Cumulative Sum (CUSUM) control charts operating in $O(1)$ constant time with zero floating-point accumulation drift.
+  - Online streaming anomaly detection (`AnomalyEngine`) using Exponentially Weighted Moving Average (EWMA) and Cumulative Sum (CUSUM) control charts evaluating streaming time-normalized rate metrics with bounded memory under workload churn and IEEE 754 precision.
   - Multi-signal Behavioral Fusion (`BehaviorEngine`) combining deterministic policy allowlists, CEP state machines, and statistical drift metrics.
   - Automated Decision Engine (`DecisionEngine`) scoring threats, computing decision confidence, and orchestrating policy-authorized containment actions.
 - Containment & Response Dispatcher (`ContainmentDispatcher`) supporting graduated containment levels (R1 Observe Only, R2 Process Suspension via `SIGSTOP`, R3 Process Termination via `SIGKILL`, R4 Container/Network Isolation) with strict transactional pre-commitment (`ACTION_PLANNED` committed to the SQLite hash chain prior to signal dispatch) and strict attribution gates that prevent destructive actions against Profile D or unverified identities.
 - Cryptographic chain custody and forensic bundle export (`export-custody`, `verify-custody`) with immutable SHA-256 / HMAC manifests for external audit and incident response.
-- Automated baseline discovery via `learn-profile` that synthesizes hardened `WorkloadProfile` definitions from observed Tetragon JSONL activity.
 
 ## Explicit product limits
 

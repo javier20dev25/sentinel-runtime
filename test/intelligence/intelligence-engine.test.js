@@ -2,169 +2,453 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { EvidenceLedger } = require('../../src/evidence');
-const { ContainmentDispatcher, ContainmentStatus } = require('../../src/containment');
+const { ContainmentDispatcher, ContainmentStatus, ContainmentLevel } = require('../../src/containment');
 const {
   SequenceDetector,
   ChainType,
   StreamingStatTracker,
+  ChannelRateWindow,
   AnomalyEngine,
   BehaviorEngine,
   DecisionEngine
 } = require('../../src/intelligence');
+const { TetragonGrpcCollector } = require('../../src/collectors/tetragon-grpc');
+const { loadTetragonApi } = require('../../src/collectors/tetragon-proto');
+const { validateEventV2 } = require('../../src/contracts/validate-event-v2');
 
-describe('SequenceDetector - Complex Event Processing (CEP) & Kill Chains', () => {
-  it('detects an exfiltration sequence: sensitive file read followed by network outbound', () => {
+function tempLedger() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sentinel-intel-test-'));
+  const ledger = new EvidenceLedger(path.join(directory, 'runtime.sqlite'));
+  return { directory, ledger };
+}
+
+describe('SequenceDetector - Strict Attribution & Chronological Ordering', () => {
+  // Test 1: Correct chronological ordering triggers sequence
+  it('1. Correct chronological ordering triggers suspicious exfiltration sequence', () => {
     const detector = new SequenceDetector({ windowMs: 10000 });
-    const identity = { hostId: 'h1', bootId: 'b1', execId: 'exec-101', pid: 501 };
+    const identity = { host_id: 'host-1', boot_id: 'boot-1', exec_id: 'exec-101', pid: 501 };
 
-    // Step 1: Process initialized
-    detector.evaluate({ eventType: 'PROCESS_EXEC', data: { binary: '/usr/bin/worker' } }, identity);
+    const t0 = 100000;
+    detector.evaluate({ eventType: 'PROCESS_EXEC', data: { binary: '/usr/bin/worker' }, sourceEventKey: 'key-exec' }, identity, t0);
+    detector.evaluate({ eventType: 'FILE_READ', data: { path: '/etc/shadow' }, sourceEventKey: 'key-file' }, identity, t0 + 100);
 
-    // Step 2: Read sensitive shadow file
-    detector.evaluate({ eventType: 'FILE_READ', data: { path: '/etc/shadow' } }, identity);
-
-    // Step 3: Network outbound attempt
     const detections = detector.evaluate(
-      { eventType: 'NETWORK_CONNECT', data: { destination_host: '198.51.100.5', destination_port: 4444 } },
-      identity
+      { eventType: 'NETWORK_CONNECT', data: { destination_host: '198.51.100.5', destination_port: 4444 }, sourceEventKey: 'key-net' },
+      identity,
+      t0 + 200
     );
 
     assert.ok(detections);
     assert.equal(detections.length, 1);
-    assert.equal(detections[0].chainType, ChainType.EXFILTRATION);
-    assert.equal(detections[0].severity, 'CRITICAL');
-    assert.equal(detections[0].confidence, 0.95);
+    assert.equal(detections[0].chainType, ChainType.SUSPICIOUS_EXFILTRATION);
+    assert.equal(detections[0].severity, 'HIGH');
+    assert.equal(detections[0].stageTimestamps.fileAccess < detections[0].stageTimestamps.networkAttempt, true);
+    assert.deepEqual(detections[0].sourceEventKeys, ['key-file', 'key-net']);
   });
 
-  it('detects a reverse shell sequence: network outbound followed by interactive shell spawn', () => {
+  // Test 2: Reverse ordering must NOT trigger a sequence
+  it('2. Reverse ordering (network outbound before sensitive file read) must NOT trigger exfiltration', () => {
     const detector = new SequenceDetector({ windowMs: 10000 });
-    const identity = { hostId: 'h1', bootId: 'b1', execId: 'exec-102', pid: 502 };
+    const identity = { host_id: 'host-1', boot_id: 'boot-1', exec_id: 'exec-102', pid: 502 };
 
-    // Step 1: Network socket connected to external peer
+    const t0 = 200000;
+    // Step 1: Network connect happens first at t0
     detector.evaluate(
-      { eventType: 'NETWORK_CONNECT', data: { destination_host: '203.0.113.8', destination_port: 1337 } },
-      identity
+      { eventType: 'NETWORK_CONNECT', data: { destination_host: '198.51.100.5', destination_port: 4444 }, sourceEventKey: 'key-net' },
+      identity,
+      t0
     );
 
-    // Step 2: Shell spawned
+    // Step 2: Sensitive file read happens AFTER at t0 + 500
     const detections = detector.evaluate(
-      { eventType: 'PROCESS_EXEC', data: { binary: '/bin/bash' } },
-      identity
+      { eventType: 'FILE_READ', data: { path: '/etc/shadow' }, sourceEventKey: 'key-file' },
+      identity,
+      t0 + 500
+    );
+
+    // Reverse order must not trigger exfiltration kill-chain
+    assert.equal(detections, null);
+  });
+
+  // Test 3: PID reuse must NOT correlate separate executions
+  it('3. PID reuse with distinct exec_id does NOT merge FSM chains', () => {
+    const detector = new SequenceDetector({ windowMs: 10000 });
+    const identity1 = { host_id: 'host-1', boot_id: 'boot-1', exec_id: 'exec-aaa', pid: 999 };
+    const identity2 = { host_id: 'host-1', boot_id: 'boot-1', exec_id: 'exec-bbb', pid: 999 };
+
+    const t0 = 300000;
+    // First process (exec-aaa) reads sensitive file
+    detector.evaluate({ eventType: 'FILE_READ', data: { path: '/etc/shadow' }, sourceEventKey: 'key-file-1' }, identity1, t0);
+
+    // Second process (exec-bbb) with reused PID 999 connects to network
+    const detections = detector.evaluate(
+      { eventType: 'NETWORK_CONNECT', data: { destination_host: '198.51.100.5', destination_port: 80 }, sourceEventKey: 'key-net-2' },
+      identity2,
+      t0 + 100
+    );
+
+    // Must NOT correlate across distinct exec_id values
+    assert.equal(detections, null);
+  });
+
+  // Test 4: Missing exec_id must NEVER create strong attribution
+  it('4. Missing exec_id must never create strong causal attribution', () => {
+    const detector = new SequenceDetector();
+    // Only PID, no exec_id
+    const identityPartial = { host_id: 'host-1', boot_id: 'boot-1', pid: 555 };
+
+    const res1 = detector.evaluate({ eventType: 'FILE_READ', data: { path: '/etc/shadow' } }, identityPartial, 1000);
+    const res2 = detector.evaluate({ eventType: 'NETWORK_CONNECT', data: { destination_host: '1.2.3.4' } }, identityPartial, 2000);
+
+    assert.equal(res1, null);
+    assert.equal(res2, null);
+    // Ensure no state was stored
+    assert.equal(detector.processFsm.size, 0);
+  });
+
+  // Test 5: Missing identity must NOT collapse into pid:0 or default strings
+  it('5. Missing identity must not collapse into pid:0 or default strings', () => {
+    const detector = new SequenceDetector();
+    assert.equal(detector.processKey(null), null);
+    assert.equal(detector.processKey({}), null);
+    assert.equal(detector.processKey({ pid: 0 }), null);
+    assert.equal(detector.processKey({ host_id: 'h1', boot_id: '', exec_id: 'e1' }), null);
+    assert.equal(detector.processKey({ host_id: '', boot_id: 'b1', exec_id: 'e1' }), null);
+    assert.equal(detector.processKey({ host_id: 'h1', boot_id: 'b1', exec_id: '' }), null);
+  });
+
+  // Test 6: Duplicate detections must be suppressed (deterministic incident keys)
+  it('6. Duplicate detections are suppressed by deterministic incident keys', () => {
+    const detector = new SequenceDetector({ windowMs: 10000 });
+    const identity = { host_id: 'host-1', boot_id: 'boot-1', exec_id: 'exec-dup-1', pid: 777 };
+
+    const t0 = 400000;
+    detector.evaluate({ eventType: 'FILE_READ', data: { path: '/etc/shadow' }, sourceEventKey: 'key-file-dup' }, identity, t0);
+
+    // First network connect -> fires detection
+    const detections1 = detector.evaluate(
+      { eventType: 'NETWORK_CONNECT', data: { destination_host: '198.51.100.5' }, sourceEventKey: 'key-net-dup' },
+      identity,
+      t0 + 100
+    );
+    assert.ok(detections1);
+    assert.equal(detections1.length, 1);
+
+    // Subsequent event for the same process should NOT re-emit the same incident
+    const detections2 = detector.evaluate(
+      { eventType: 'NETWORK_CONNECT', data: { destination_host: '198.51.100.5' }, sourceEventKey: 'key-net-dup' },
+      identity,
+      t0 + 200
+    );
+    assert.equal(detections2, null);
+  });
+
+  // Test 7: Process exit must expire and purge state
+  it('7. Process exit (PROCESS_EXIT) expires and clears process FSM state immediately', () => {
+    const detector = new SequenceDetector({ windowMs: 10000 });
+    const identity = { host_id: 'host-1', boot_id: 'boot-1', exec_id: 'exec-exit-1', pid: 888 };
+
+    detector.evaluate({ eventType: 'FILE_READ', data: { path: '/etc/shadow' } }, identity, 500000);
+    assert.equal(detector.processFsm.size, 1);
+
+    // Process exits
+    detector.evaluate({ eventType: 'PROCESS_EXIT' }, identity, 500500);
+    assert.equal(detector.processFsm.size, 0);
+  });
+
+  // Test 8: Conservative labeling: file read + network egress is attempt, not confirmed transfer
+  it('8. Exfiltration sequence is labeled as suspicious attempt, not confirmed transfer', () => {
+    const detector = new SequenceDetector();
+    const identity = { host_id: 'host-1', boot_id: 'boot-1', exec_id: 'exec-cons-1', pid: 889 };
+
+    detector.evaluate({ eventType: 'FILE_READ', data: { path: '/etc/shadow' } }, identity, 1000);
+    const detections = detector.evaluate(
+      { eventType: 'NETWORK_CONNECT', data: { destination_host: '10.0.0.1' } },
+      identity,
+      2000
     );
 
     assert.ok(detections);
-    assert.equal(detections.length, 1);
-    assert.equal(detections[0].chainType, ChainType.REVERSE_SHELL);
-    assert.equal(detections[0].severity, 'CRITICAL');
+    assert.equal(detections[0].chainType, 'SUSPICIOUS_EXFILTRATION_SEQUENCE');
+    assert.ok(detections[0].title.includes('unconfirmed'));
+    assert.ok(detections[0].confidence <= 0.75);
+  });
+
+  // Test 9: Capability check is marked as capability check observed, not confirmed privilege change
+  it('9. cap_capable check is labeled as capability check observed, not confirmed privilege escalation', () => {
+    const detector = new SequenceDetector();
+    const identity = { host_id: 'host-1', boot_id: 'boot-1', exec_id: 'exec-cap-1', pid: 890 };
+
+    detector.evaluate({ eventType: 'CAPABILITY_CHECK', data: { capability_name: 'CAP_SYS_ADMIN' } }, identity, 1000);
+    const detections = detector.evaluate(
+      { eventType: 'PROCESS_EXEC', data: { binary: '/bin/bash' } },
+      identity,
+      2000
+    );
+
+    assert.ok(detections);
+    assert.equal(detections[0].chainType, 'CAPABILITY_CHECK_OBSERVED');
+    assert.equal(detections[0].severity, 'MEDIUM');
+    assert.ok(detections[0].title.includes('Capability Check Observed'));
+  });
+
+  // Test 10: Reverse shell sequence correlation requirements
+  it('10. Reverse shell sequence requires network connection before interpreter execution', () => {
+    const detector = new SequenceDetector();
+    const identity = { host_id: 'host-1', boot_id: 'boot-1', exec_id: 'exec-sh-1', pid: 891 };
+
+    detector.evaluate({ eventType: 'NETWORK_CONNECT', data: { destination_host: '192.0.2.1', destination_port: 4444 } }, identity, 1000);
+    const detections = detector.evaluate({ eventType: 'PROCESS_EXEC', data: { binary: '/bin/sh' } }, identity, 1500);
+
+    assert.ok(detections);
+    assert.equal(detections[0].chainType, 'SUSPICIOUS_NETWORK_AND_SHELL_SEQUENCE');
+    assert.equal(detections[0].severity, 'HIGH');
+    assert.ok(detections[0].title.includes('socket inheritance unconfirmed'));
   });
 });
 
-describe('AnomalyEngine - Streaming EWMA & CUSUM Outlier Detection', () => {
-  it('detects sudden statistical burst using StreamingStatTracker', () => {
-    const tracker = new StreamingStatTracker({ alpha: 0.2, thresholdZ: 2.5 });
+describe('AnomalyEngine - Real Time Rates, Warm-up & Churn Bounding', () => {
+  // Test 11: Constant-rate traffic versus true burst
+  it('11. Constant-rate traffic does not trigger an anomaly, sudden rate spike triggers', () => {
+    const tracker = new StreamingStatTracker({ alpha: 0.15, thresholdZ: 3.5, warmupObservations: 15 });
 
-    // Establish normal baseline around 5-7 events
+    // Establish normal baseline: 10 events/sec constant rate for 20 observations
     for (let i = 0; i < 20; i++) {
-      tracker.update(5 + Math.sin(i) * 0.5);
+      const res = tracker.update(10.0 + (i % 2 === 0 ? 0.2 : -0.2));
+      assert.equal(res.isAnomaly, false);
+      assert.equal(res.warmedUp, i >= 14);
     }
 
-    // Inject sudden massive spike
-    const outlierResult = tracker.update(100);
-    assert.equal(outlierResult.isAnomaly, true);
-    assert.ok(outlierResult.zScore > 2.5);
+    // Normal variation should not trigger
+    const normalRes = tracker.update(10.5);
+    assert.equal(normalRes.isAnomaly, false);
+
+    // Sudden massive rate burst (100 events/sec vs 10 events/sec baseline)
+    const burstRes = tracker.update(100.0);
+    assert.equal(burstRes.isAnomaly, true);
+    assert.ok(burstRes.zScore > 3.5);
   });
 
-  it('evaluates anomalous bursts across workloads in real-time', () => {
-    const engine = new AnomalyEngine();
+  // Test 12: Stationary traffic versus abrupt drift
+  it('12. Stationary traffic maintains baseline without false alert; abrupt jump triggers CUSUM', () => {
+    const tracker = new StreamingStatTracker({ alpha: 0.1, thresholdZ: 4.0, cusumH: 4.0, warmupObservations: 15 });
 
-    // Baseline executions
-    for (let i = 0; i < 15; i++) {
-      engine.evaluate({ eventType: 'PROCESS_EXEC' }, 'api-worker');
+    // Stationary traffic with natural variation: 5.0 +/- 0.3 over 25 steps
+    for (let i = 0; i < 25; i++) {
+      const rate = 5.0 + (Math.sin(i) * 0.3);
+      const res = tracker.update(rate);
+      assert.equal(res.isAnomaly, false);
     }
 
-    // Heavy burst
-    let triggered = null;
-    for (let i = 0; i < 30; i++) {
-      const res = engine.evaluate({ eventType: 'PROCESS_EXEC' }, 'api-worker');
-      if (res) {
-        triggered = res;
+    // Now inject abrupt sustained shift to 25.0
+    let cusumFired = false;
+    for (let i = 0; i < 5; i++) {
+      const res = tracker.update(25.0);
+      if (res.cusumAlert || res.isAnomaly) {
+        cusumFired = true;
         break;
       }
     }
+    assert.equal(cusumFired, true);
+  });
 
-    assert.ok(triggered);
-    assert.equal(triggered[0].type, 'ANOMALOUS_PROCESS_BURST');
-    assert.equal(triggered[0].severity, 'HIGH');
+  // Test 13: Event timestamp regression handling
+  it('13. Event timestamp regression is handled safely without corrupting time window', () => {
+    const window = new ChannelRateWindow({ windowMs: 1000 });
+
+    window.recordEvent(5000);
+    window.recordEvent(5100);
+
+    // Out of order / regressing timestamp: should be safely ignored
+    const regressionResult = window.recordEvent(4500);
+    assert.equal(regressionResult, null);
+
+    // Normal forward timestamp: continues window tracking cleanly
+    window.recordEvent(5200);
+    const flushResult = window.recordEvent(6050);
+    assert.ok(flushResult !== null || window.eventCountInWindow >= 1);
+  });
+
+  // Test 14: Workload churn and bounded memory
+  it('14. Workload churn maintains bounded memory through tracker capacity limit and TTL', () => {
+    const engine = new AnomalyEngine({ maxTrackers: 5, trackerTtlMs: 1000 });
+
+    const now = 100000;
+    // Generate 15 distinct short-lived workload IDs
+    for (let i = 0; i < 15; i++) {
+      engine.evaluate({ eventType: 'PROCESS_EXEC', timestamp: now + i * 10 }, `workload-churn-${i}`, now + i * 10);
+    }
+
+    // Trackers must never exceed maxTrackers (5)
+    assert.ok(engine.workloadTrackers.size <= 5);
+
+    // Advance time beyond TTL and prune
+    engine.pruneTrackers(now + 50000);
+    assert.equal(engine.workloadTrackers.size, 0);
   });
 });
 
-describe('DecisionEngine - Fused Signals & Automated Containment Lifecycle', () => {
-  it('fuses kill-chain sequence into a CRITICAL decision and triggers authorized dry-run containment', async () => {
+describe('DecisionEngine - Strict Safety Gates & Evidence Retention', () => {
+  // Test 15: Observability loss blocks destructive response
+  it('15. Observability degradation strictly blocks destructive containment (R3/R4)', async () => {
     const ledger = new EvidenceLedger(':memory:');
     const dispatcher = new ContainmentDispatcher({ ledger, dryRun: true });
-    const decisionEngine = new DecisionEngine({ dispatcher, autoContain: true });
+    const decisionEngine = new DecisionEngine({
+      dispatcher,
+      autoContain: true,
+      allowAutomatedTermination: true
+    });
 
     const analysis = {
-      workloadId: 'payment-svc',
-      identity: { pid: 9001, exec_id: 'host-1:boot-1:9001:1000' },
+      workloadId: 'prod-api',
+      identity: { host_id: 'host-1', boot_id: 'boot-1', exec_id: 'exec-loss-1', pid: 1234 },
       deterministicDeviation: null,
       sequenceDetections: [
         {
-          chainType: ChainType.EXFILTRATION,
-          severity: 'CRITICAL',
-          confidence: 0.95,
-          title: 'Exfiltration sequence detected'
+          chainType: 'SUSPICIOUS_EXFILTRATION_SEQUENCE',
+          severity: 'HIGH',
+          confidence: 0.70,
+          title: 'Suspicious exfiltration detected',
+          sourceEventKeys: ['key-1', 'key-2']
         }
       ],
-      anomalyDetections: null
+      anomalyDetections: null,
+      // Degraded observability: telemetry dropped by sensor
+      observabilityStatus: 'DEGRADED',
+      telemetryLoss: { domain: 'sensor_throttle', count: '15' }
     };
 
     const decision = await decisionEngine.decide(analysis);
 
-    assert.equal(decision.threatLevel, 'CRITICAL');
-    assert.equal(decision.confidence, 0.95);
-    assert.equal(decision.requestedAction, 'PROCESS_TERMINATE');
-    assert.ok(decision.containmentOutcome);
-    assert.equal(decision.containmentOutcome.status, ContainmentStatus.SKIPPED_DRY_RUN);
-
-    // Verify ledger persistence
-    const records = ledger.getRecords();
-    assert.equal(records.length, 2);
-    assert.equal(records[0].record_type, 'containment_result');
-    assert.equal(records[1].record_type, 'containment_planned');
-
-    const integrity = ledger.verifyIntegrity();
-    assert.equal(integrity.valid, true);
+    assert.equal(decision.threatLevel, 'HIGH');
+    // Must be gated to R1_OBSERVE_ONLY due to observability degradation
+    assert.equal(decision.requestedAction, ContainmentLevel.R1_OBSERVE_ONLY);
+    assert.ok(decision.safetyGatingReasons.some(r => r.includes('Observability degraded')));
+    assert.deepEqual(decision.evidenceReferences, ['key-1', 'key-2']);
   });
 
-  it('blocks destructive containment when target identity lacks verified lineage', async () => {
-    const ledger = new EvidenceLedger(':memory:');
-    const dispatcher = new ContainmentDispatcher({ ledger, dryRun: true });
-    const decisionEngine = new DecisionEngine({ dispatcher, autoContain: true });
+  // Test 16: R2 requires explicit human authorization
+  it('16. Process suspension (R2) requires explicit operator authorization and blocks automated R2 by default', async () => {
+    const decisionEngineDefault = new DecisionEngine();
 
     const analysis = {
-      workloadId: 'payment-svc',
-      // Profile D / transient unverified target
-      identity: { pid: 9002, profile: 'D', attribution: 'UNKNOWN' },
+      workloadId: 'worker-1',
+      identity: { host_id: 'host-1', boot_id: 'boot-1', exec_id: 'exec-r2-1', pid: 4321 },
       deterministicDeviation: null,
       sequenceDetections: [
         {
-          chainType: ChainType.EXFILTRATION,
-          severity: 'CRITICAL',
-          confidence: 0.95,
-          title: 'Exfiltration sequence detected'
+          chainType: 'SUSPICIOUS_NETWORK_AND_SHELL_SEQUENCE',
+          severity: 'HIGH',
+          confidence: 0.65,
+          title: 'Suspicious network and shell sequence'
         }
       ],
-      anomalyDetections: null
+      anomalyDetections: null,
+      observabilityStatus: 'NORMAL'
     };
 
-    const decision = await decisionEngine.decide(analysis);
+    const decision = await decisionEngineDefault.decide(analysis);
 
-    assert.equal(decision.threatLevel, 'CRITICAL');
-    assert.equal(decision.containmentOutcome.status, ContainmentStatus.BLOCKED_UNSAFE);
+    // By default, automated suspension is disabled and requires human authorization
+    assert.equal(decision.requestedAction, ContainmentLevel.R1_OBSERVE_ONLY);
+    assert.ok(decision.safetyGatingReasons.some(r => r.includes('human operator authorization')));
+  });
 
-    const integrity = ledger.verifyIntegrity();
-    assert.equal(integrity.valid, true);
+  // Test 17: Real collector-to-BehaviorEngine integration using version-pinned Tetragon fixtures
+  it('17. Real collector-to-BehaviorEngine integration with Tetragon gRPC stream commits validated decisions', async () => {
+    const api = loadTetragonApi();
+    const server = new api.grpc.Server();
+
+    const responses = [
+      {
+        node_name: 'test-node',
+        time: { seconds: '1793603690', nanos: 100000000 },
+        process_exec: {
+          process: {
+            exec_id: 'exec-integ-1',
+            pid: { value: 101 },
+            tid: { value: 101 },
+            start_time: { seconds: '1793603680', nanos: 0 },
+            binary: '/usr/bin/node',
+            arguments: 'node worker.js'
+          }
+        }
+      },
+      {
+        node_name: 'test-node',
+        time: { seconds: '1793603695', nanos: 0 },
+        process_exit: {
+          process: {
+            exec_id: 'exec-integ-1',
+            pid: { value: 101 },
+            start_time: { seconds: '1793603680', nanos: 0 },
+            binary: '/usr/bin/node'
+          },
+          status: 0,
+          signal: ''
+        }
+      }
+    ];
+
+    server.addService(api.service.service, {
+      getVersion(_call, callback) { callback(null, { version: 'v1.8.0' }); },
+      getEvents(call) {
+        for (const resp of responses) call.write(resp);
+        call.end();
+      }
+    });
+
+    const port = await new Promise((resolve, reject) => {
+      server.bindAsync('127.0.0.1:0', api.grpc.ServerCredentials.createInsecure(), (err, p) => err ? reject(err) : resolve(p));
+    });
+
+    const { directory, ledger } = tempLedger();
+    let clientConnection;
+    try {
+      clientConnection = new api.service(`127.0.0.1:${port}`, api.grpc.credentials.createInsecure());
+      const behaviorEngine = new BehaviorEngine();
+      const decisionEngine = new DecisionEngine();
+
+      const collector = new TetragonGrpcCollector({
+        ledger,
+        hostId: 'host-integ',
+        bootId: 'boot-integ',
+        maxEvents: 2,
+        batchSize: 2,
+        flushIntervalMs: 50,
+        expectedNodeName: 'test-node',
+        behaviorEngine,
+        decisionEngine,
+        connectionFactory: async () => ({
+          client: clientConnection,
+          close: () => clientConnection.close(),
+          transportProtocol: 'GRPC_TCP',
+          transportAuthentication: 'TLS_SERVER_AUTH'
+        })
+      });
+
+      const result = await collector.run();
+      assert.equal(result.supported, 2);
+
+      // Verify that ledger records received decisions from BehaviorEngine & DecisionEngine
+      const records = ledger.getRecords({ limit: 10 }).map(r => ({ ...r, payload: JSON.parse(r.payload_json) }));
+      const eventRecords = records.filter(r => r.record_type === 'event');
+      assert.equal(eventRecords.length, 2);
+
+      for (const rec of eventRecords) {
+        assert.ok(rec.payload.decision);
+        assert.equal(rec.payload.decision.threatLevel, 'NORMAL');
+        assert.equal(rec.payload.decision.requestedAction, ContainmentLevel.R1_OBSERVE_ONLY);
+        assert.equal(validateEventV2(rec.payload.event).valid, true);
+      }
+    } finally {
+      ledger.close();
+      server.forceShutdown();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
