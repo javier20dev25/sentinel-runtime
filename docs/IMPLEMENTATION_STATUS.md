@@ -47,7 +47,7 @@ Also on 2026-11-03, the manual kprobe smoke test loaded a temporary Tetragon v1.
 
 The live read-only proxy smoke connected to the same Tetragon v1.8.0 daemon, returned the pinned version, forwarded five event frames with raw protobuf bytes retained, and rejected `GetHealth` with gRPC `UNIMPLEMENTED`. It did not invoke a mutating Tetragon RPC. A separate loopback integration test appends an unknown protobuf wire field and verifies byte-for-byte preservation through the proxy.
 
-Following Phase 001C remediation and test-discovery hardening, the Windows test suite passes **224/226** with **2 Linux-only tests skipped** and no failures. Under the current host environment, WSL2 invokes Windows `node.exe` through interop (`process.platform === 'win32'`), which executes the same 224 passed and 2 skipped; native Linux execution (`process.platform === 'linux'`) remains pending native guest Node.js provisioning. `systemd-analyze verify` accepted both units using temporary placeholder executable and account values because WSL does not have `/usr/bin/node` or the dedicated service accounts; the production units have not been installed or started on a supported Linux distribution. The synthetic v1.8.0 throughput runs and their limits are recorded in [`SR-GRPC-002`](benchmarks/SR-GRPC-002.md).
+Following Phase 001C remediation and test-discovery hardening, the Windows test suite passes **258/260** with **2 Linux-only tests skipped** (TLS key permission checks and read-only proxy socket permissions requiring Linux `chmod`) and no failures. Under the current host environment, WSL2 invokes Windows `node.exe` through interop (`process.platform === 'win32'`), which executes the same 258 passed and 2 skipped; native Linux execution (`process.platform === 'linux'`) is verified in GitHub Actions CI where all 260 tests pass. `systemd-analyze verify` accepted both units using temporary placeholder executable and account values because WSL does not have `/usr/bin/node` or the dedicated service accounts; the production units have not been installed or started on a supported Linux distribution. The synthetic v1.8.0 throughput runs and their limits are recorded in [`SR-GRPC-002`](benchmarks/SR-GRPC-002.md).
 
 Event Contract v2 remains an unapproved candidate (SHA-256: `40ff2d683cb3efd81376cc136af6e4d8afc0ea4d934a9745dec4f2c479a838fa`), pending independent review. Requirements S-1 through S-6, Profile D (`RAW_PARTIAL_PROCESS_EVENT` — strictly provisional), canonical uint64 decimal-string validation, and transport-separated cursors (`FILE_BYTES` vs `GRPC_SEQUENCE`) are implemented in the candidate schema and verified by the production validator. Native event materialization passes the strict v2 validator on both ingestion paths. Exploratory observations under `scripts/manual/` (`tcp_sendmsg` and `cap_capable` on one Tetragon v1.8.0 WSL2 kernel) are micro-benchmark checks only and do NOT constitute formal L3 sensor evidence. Provenance matrix gate remains `REOPENED — BLOCKED`. Phase 001D (live sensor validation) and Phase 001E (durable queue) have not started and remain unauthorized.
 
@@ -119,15 +119,32 @@ This benchmark measures the intelligence engine modules only. It does not repres
 | SequenceDetector (tests 1–10) | 10 | 10 | 0 | 0 |
 | AnomalyEngine (tests 11–14) | 4 | 4 | 0 | 0 |
 | DecisionEngine (tests 15–17) | 3 | 3 | 0 | 0 |
-| Full suite | 258 | 256 | 2 | 0 |
+| Stream gap & restart recovery (F5-R1) | 2 | 2 | 0 | 0 |
+| Full suite | 260 | 258 | 2 | 0 |
 
-The two skipped tests require Linux file permission semantics (`chmod`) and are skipped on Windows.
+The two skipped tests require Linux file permission semantics (`chmod`) and are skipped on Windows (both run and pass on Ubuntu CI).
+
+### Observability recovery semantics (F5-R1-R1 / Fase B)
+
+Documented in [`docs/specs/L3_F5_R1_CORRECTION_REPORT.md`](specs/L3_F5_R1_CORRECTION_REPORT.md):
+- `GAP_ACKNOWLEDGED`: Records operator acknowledgement (`OPERATOR_ACK`) and accepted risk in health records and checkpoints, but preserves `observabilityDegraded = true`. Risk acceptance does not fabricate data continuity.
+- `SENSOR_REPLAY_VERIFIED`: Strict cryptographic replay evidence (`replay_id`, sequence range, event count, and optional SHA-256 `replay_hash`) required to transition to `RECOVERED` and clear degradation.
+- Sensor limitation: Tetragon v1.8.0 `GetEvents` RPC does not support cursors or historical replay; live sensor replay recovery is currently unsupported on direct gRPC.
+- Gating invariant: Detections occurring during an unrecovered stream gap are strictly clamped to `R1_OBSERVE_ONLY`.
+
+### L3-07 benchmark metric clarification
+
+L3-07 executed 6 controlled workload scenarios (3 labeled adversarial, 3 labeled benign):
+- **Scenario-level confusion matrix:** TP = 3 scenarios, FN = 0 scenarios, FP = 0 scenarios, TN = 3 scenarios.
+- **Alert emissions:** Across the 3 positive scenarios, exactly 6 individual detection alerts were generated (2 detections per scenario: sequence pattern match + policy deviation). Benign scenarios produced 0 detection alerts.
+- All detections operated under strict `OBSERVE_ONLY` mode (`autoContain = false`).
 
 ### What is not yet demonstrated
 
-- Live Tetragon sensor connected: the gRPC integration is verified against a loopback fixture server, not a live kernel sensor.
+- Live Tetragon sensor connected in production Linux: exploratory observation is verified in WSL2 (`L3-W`), but native deployment validation (`L3-N`) on a standalone Linux host remains open.
+- F6 (pre-restart process continuity): processes active prior to sensor restart remain `PARTIALLY_ATTRIBUTED` without synthetic identity bridging.
 - Distributed or multi-node FSM state: `SequenceDetector` state is in-process and local to a single node.
-- Production false-positive / false-negative rates: 17 adversarial vectors in a controlled test environment do not constitute production evidence.
+- Production false-positive / false-negative rates: 6 controlled scenarios in a lab environment do not constitute production evidence.
 - Live enforcement: `autoContain` and `dryRun` remain at their safe defaults. No process has been suspended or terminated by the engine.
 
 ---

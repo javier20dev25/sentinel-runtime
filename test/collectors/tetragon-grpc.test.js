@@ -11,6 +11,7 @@ const { EvidenceLedger } = require('../../src/evidence');
 const { TetragonGrpcCollector, createTetragonConnection, parseTetragonAddress } = require('../../src/collectors/tetragon-grpc');
 const { loadTetragonApi } = require('../../src/collectors/tetragon-proto');
 const { validateEventV2 } = require('../../src/contracts/validate-event-v2');
+const { DecisionEngine } = require('../../src/intelligence/decision-engine');
 
 function tempLedger() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sentinel-runtime-grpc-'));
@@ -360,6 +361,240 @@ test('Tetragon max-events cutoff reports queued events separately from overflow'
     assert.equal(result.unprocessed_at_limit_lower_bound, '1');
     const health = ledger.getRecords({ limit: 100 }).filter(row => row.record_type === 'sensor_health');
     assert.ok(health.some(row => JSON.parse(row.payload_json).event.event_type === 'COLLECTOR_LIMIT_REACHED'));
+    assert.equal(ledger.verifyIntegrity().valid, true);
+  } finally {
+    ledger.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Tetragon stream gap keeps subsequent detections observe-only', { timeout: 15000 }, async () => {
+  const api = loadTetragonApi();
+  const { directory, ledger } = tempLedger();
+  const execResponse = rawDecodedResponse(api, processExec('exec-after-gap'));
+  let connections = 0;
+  const client = {
+    getVersion(_request, _options, callback) { callback(null, { version: 'v1.8.0' }); },
+    getEvents() {
+      const stream = new EventEmitter();
+      stream.pause = () => {};
+      stream.resume = () => {};
+      stream.cancel = () => {};
+      connections++;
+      if (connections === 1) {
+        process.nextTick(() => stream.emit('error', Object.assign(new Error('sensor unavailable'), { code: 14 })));
+      } else {
+        process.nextTick(() => { stream.emit('data', execResponse); stream.emit('end'); });
+      }
+      return stream;
+    }
+  };
+  const analysis = {
+    workloadId: 'gap-worker',
+    identity: { host_id: 'host-gap', boot_id: 'boot-gap', exec_id: 'exec-after-gap', pid: 202 },
+    deterministicDeviation: null,
+    sequenceDetections: [{
+      chainType: 'SUSPICIOUS_EXFILTRATION_SEQUENCE',
+      severity: 'HIGH',
+      confidence: 0.7,
+      title: 'Suspicious exfiltration detected',
+      sourceEventKeys: ['key-before-gap', 'key-after-gap']
+    }],
+    anomalyDetections: null,
+    observabilityStatus: 'NORMAL',
+    telemetryLoss: null
+  };
+  const decisionEngine = new DecisionEngine({ allowAutomatedSuspension: true, requireHumanApprovalForR2: false });
+  const collector = new TetragonGrpcCollector({
+    ledger, hostId: 'host-gap', bootId: 'boot-gap', maxEvents: 1, batchSize: 1, flushIntervalMs: 10,
+    connectionFactory: async () => ({ client, close() {}, transportProtocol: 'GRPC_TCP' }),
+    behaviorEngine: { analyzeEvent: () => analysis },
+    decisionEngine
+  });
+  try {
+    const result = await collector.run();
+    assert.equal(result.received, 1);
+    assert.equal(connections, 2);
+    const rows = ledger.getRecords({ limit: 100 }).map(row => ({ ...row, payload: JSON.parse(row.payload_json) }));
+    const disconnected = rows.find(row => row.record_type === 'sensor_health' &&
+      row.payload.event.event_type === 'STREAM_DISCONNECTED');
+    assert.ok(disconnected);
+    assert.equal(disconnected.payload.details.observability_degraded, true);
+    const exec = rows.find(row => row.record_type === 'event' && row.payload.event.event_type === 'PROCESS_EXEC');
+    assert.ok(exec);
+    assert.equal(exec.payload.decision.requestedAction, 'OBSERVE_ONLY');
+    assert.equal(exec.payload.decision.observabilityStatus, 'DEGRADED');
+    assert.ok(exec.payload.decision.safetyGatingReasons.some(reason => reason.includes('Observability degraded')));
+    assert.equal(ledger.verifyIntegrity().valid, true);
+  } finally {
+    ledger.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Tetragon collector restart preserves degraded observability and requires evidence to recover', { timeout: 15000 }, async () => {
+  const api = loadTetragonApi();
+  const { directory, ledger } = tempLedger();
+  const firstExecResponse = rawDecodedResponse(api, processExec('exec-before-restart'));
+  const secondExecResponse = rawDecodedResponse(api, processExec('exec-after-restart'));
+  const clientFor = response => ({
+    getVersion(_request, _options, callback) { callback(null, { version: 'v1.8.0' }); },
+    getEvents() {
+      const stream = new EventEmitter();
+      stream.pause = () => {};
+      stream.resume = () => {};
+      stream.cancel = () => {};
+      process.nextTick(() => { stream.emit('data', response); stream.emit('end'); });
+      return stream;
+    }
+  });
+  const analysis = {
+    workloadId: 'restart-worker',
+    identity: { host_id: 'host-restart', boot_id: 'boot-restart', exec_id: 'exec-after-restart', pid: 303 },
+    deterministicDeviation: null,
+    sequenceDetections: [{
+      chainType: 'SUSPICIOUS_EXFILTRATION_SEQUENCE',
+      severity: 'HIGH',
+      confidence: 0.7,
+      title: 'Suspicious exfiltration detected',
+      sourceEventKeys: ['key-before-restart', 'key-after-restart']
+    }],
+    anomalyDetections: null,
+    observabilityStatus: 'NORMAL',
+    telemetryLoss: null
+  };
+  const firstCollector = new TetragonGrpcCollector({
+    ledger, hostId: 'host-restart', bootId: 'boot-restart', maxEvents: 1, batchSize: 1, flushIntervalMs: 10,
+    connectionFactory: async () => ({ client: clientFor(firstExecResponse), close() {}, transportProtocol: 'GRPC_TCP' })
+  });
+  const decisionEngine = new DecisionEngine({ allowAutomatedSuspension: true, requireHumanApprovalForR2: false });
+  const secondCollector = new TetragonGrpcCollector({
+    ledger, hostId: 'host-restart', bootId: 'boot-restart', maxEvents: 1, batchSize: 1, flushIntervalMs: 10,
+    connectionFactory: async () => ({ client: clientFor(secondExecResponse), close() {}, transportProtocol: 'GRPC_TCP' }),
+    behaviorEngine: { analyzeEvent: () => analysis },
+    decisionEngine
+  });
+  try {
+    const firstResult = await firstCollector.run();
+    assert.equal(firstResult.received, 1);
+    assert.equal(firstCollector.observabilityState, 'HEALTHY');
+    const firstCheckpoint = ledger.getLatestSourceCheckpoint(firstCollector.sourceId);
+    assert.equal(firstCheckpoint.observability_state, 'HEALTHY');
+
+    const secondResult = await secondCollector.run();
+    assert.equal(secondResult.received, 1);
+    assert.equal(secondCollector.observabilityState, 'DEGRADED');
+    assert.equal(secondCollector.observabilityDegraded, true);
+    assert.equal(decisionEngine.observabilityDegraded, true);
+
+    const rows = ledger.getRecords({ limit: 200 }).map(row => ({ ...row, payload: JSON.parse(row.payload_json) }));
+    const connected = rows.find(row => row.record_type === 'sensor_health' &&
+      row.payload.event.event_type === 'STREAM_CONNECTED');
+    assert.ok(connected);
+    assert.equal(connected.payload.details.observability_state, 'DEGRADED');
+    assert.equal(connected.payload.details.prior_checkpoint.observability_state, 'HEALTHY');
+    assert.equal(connected.payload.details.observability_degraded, true);
+    const exec = rows.find(row => row.record_type === 'event' &&
+      row.payload.event.event_type === 'PROCESS_EXEC' &&
+      row.payload.event.process_identity?.exec_id === 'exec-after-restart');
+    assert.ok(exec);
+    assert.equal(exec.payload.decision.requestedAction, 'OBSERVE_ONLY');
+    assert.equal(exec.payload.decision.observabilityStatus, 'DEGRADED');
+    assert.ok(exec.payload.decision.safetyGatingReasons.some(reason => reason.includes('Observability degraded')));
+    const degradedCheckpoint = ledger.getLatestSourceCheckpoint(secondCollector.sourceId);
+    assert.equal(degradedCheckpoint.observability_state, 'DEGRADED');
+
+    // 1. Operator acknowledges gap - records human risk acceptance, but observability remains degraded (safety invariant)
+    assert.throws(() => secondCollector.markObservabilityGapAcknowledged({ kind: 'INVALID' }), /OPERATOR_ACK/);
+    assert.throws(() => secondCollector.markObservabilityGapAcknowledged({ kind: 'OPERATOR_ACK' }), /reference/);
+    secondCollector.markObservabilityGapAcknowledged({ kind: 'OPERATOR_ACK', reference: 'incident-1' });
+    assert.equal(secondCollector.observabilityState, 'GAP_ACKNOWLEDGED');
+    assert.equal(secondCollector.observabilityDegraded, true);
+    assert.equal(decisionEngine.observabilityDegraded, true);
+    assert.equal(decisionEngine.observabilityState, 'GAP_ACKNOWLEDGED');
+    const ackCheckpoint = ledger.getLatestSourceCheckpoint(secondCollector.sourceId);
+    assert.equal(ackCheckpoint.observability_state, 'GAP_ACKNOWLEDGED');
+    assert.equal(ackCheckpoint.observability_recovery.reference, 'incident-1');
+
+    // 2. Scenario E: Second restart of collector with prior GAP_ACKNOWLEDGED restores GAP_ACKNOWLEDGED and preserves degraded gate
+    const thirdExecResponse = rawDecodedResponse(api, processExec('exec-after-second-restart'));
+    const thirdDecisionEngine = new DecisionEngine({ allowAutomatedSuspension: true, requireHumanApprovalForR2: false });
+    const thirdAnalysis = {
+      ...analysis,
+      identity: { host_id: 'host-restart', boot_id: 'boot-restart', exec_id: 'exec-after-second-restart', pid: 404 }
+    };
+    const thirdCollector = new TetragonGrpcCollector({
+      ledger, hostId: 'host-restart', bootId: 'boot-restart', maxEvents: 1, batchSize: 1, flushIntervalMs: 10,
+      connectionFactory: async () => ({ client: clientFor(thirdExecResponse), close() {}, transportProtocol: 'GRPC_TCP' }),
+      behaviorEngine: { analyzeEvent: () => thirdAnalysis },
+      decisionEngine: thirdDecisionEngine
+    });
+    const thirdResult = await thirdCollector.run();
+    assert.equal(thirdResult.received, 1);
+    assert.equal(thirdCollector.observabilityState, 'GAP_ACKNOWLEDGED');
+    assert.equal(thirdCollector.observabilityDegraded, true);
+    assert.equal(thirdDecisionEngine.observabilityDegraded, true);
+    assert.equal(thirdDecisionEngine.observabilityState, 'GAP_ACKNOWLEDGED');
+    const thirdRows = ledger.getRecords({ limit: 50 }).map(row => ({ ...row, payload: JSON.parse(row.payload_json) }));
+    const thirdExec = thirdRows.find(row => row.record_type === 'event' &&
+      row.payload.event.event_type === 'PROCESS_EXEC' &&
+      row.payload.event.process_identity?.exec_id === 'exec-after-second-restart');
+    assert.ok(thirdExec);
+    assert.equal(thirdExec.payload.decision.requestedAction, 'OBSERVE_ONLY');
+    assert.equal(thirdExec.payload.decision.observabilityStatus, 'DEGRADED');
+
+    // 3. Scenario F: Attempting recovery via OPERATOR_ACK is rejected
+    assert.throws(() => thirdCollector.markObservabilityRecoveryPending({ kind: 'OPERATOR_ACK', reference: 'incident-2' }), /SENSOR_REPLAY_VERIFIED/);
+    assert.throws(() => thirdCollector.markObservabilityRecovered({ kind: 'OPERATOR_ACK', reference: 'incident-2' }), /RECOVERY_PENDING/);
+
+    // 4. Scenario G: Invalid, incomplete, or corrupted replay evidence is strictly rejected
+    const baseReplay = {
+      kind: 'SENSOR_REPLAY_VERIFIED',
+      reference: 'replay-session-1',
+      replay_id: 'rep-001',
+      window_start: '2026-11-08T00:00:00.000Z',
+      window_end: '2026-11-08T00:05:00.000Z',
+      source_sequence_start: '10',
+      source_sequence_end: '50',
+      event_count: 40,
+      verified: true,
+      verification_method: 'HASH_CHAIN_COMPARE',
+      replay_hash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+    };
+    // Window inverted
+    assert.throws(() => thirdCollector.markObservabilityRecoveryPending({ ...baseReplay, window_start: '2026-11-08T00:10:00.000Z', window_end: '2026-11-08T00:05:00.000Z' }), /window_start/);
+    // Sequences inverted
+    assert.throws(() => thirdCollector.markObservabilityRecoveryPending({ ...baseReplay, source_sequence_start: '100', source_sequence_end: '50' }), /source_sequence_start/);
+    // Negative event count
+    assert.throws(() => thirdCollector.markObservabilityRecoveryPending({ ...baseReplay, event_count: -1 }), /event_count/);
+    // verified !== true
+    assert.throws(() => thirdCollector.markObservabilityRecoveryPending({ ...baseReplay, verified: false }), /verified=true/);
+    // Malformed replay_hash
+    assert.throws(() => thirdCollector.markObservabilityRecoveryPending({ ...baseReplay, replay_hash: 'not-a-valid-sha256' }), /replay_hash/);
+
+    // 5. Scenario H: Valid replay transitions through RECOVERY_PENDING to RECOVERED and clears degradation
+    thirdCollector.markObservabilityRecoveryPending(baseReplay);
+    assert.equal(thirdCollector.observabilityState, 'RECOVERY_PENDING');
+    assert.equal(thirdCollector.observabilityDegraded, true);
+    assert.equal(thirdDecisionEngine.observabilityDegraded, true);
+    assert.equal(thirdDecisionEngine.observabilityState, 'RECOVERY_PENDING');
+
+    // Mismatched hash on recover throws
+    assert.throws(() => thirdCollector.markObservabilityRecovered({ ...baseReplay, replay_hash: 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' }), /match/);
+
+    // Matching replay recovers cleanly
+    thirdCollector.markObservabilityRecovered(baseReplay);
+    assert.equal(thirdCollector.observabilityState, 'RECOVERED');
+    assert.equal(thirdCollector.observabilityDegraded, false);
+    assert.equal(thirdDecisionEngine.observabilityDegraded, false);
+    assert.equal(thirdDecisionEngine.observabilityState, 'RECOVERED');
+    const recoveredCheckpoint = ledger.getLatestSourceCheckpoint(thirdCollector.sourceId);
+    assert.equal(recoveredCheckpoint.observability_state, 'RECOVERED');
+    assert.equal(recoveredCheckpoint.observability_recovery.reference, 'replay-session-1');
+    const recoveryHealth = ledger.getRecords({ limit: 20 }).map(row => ({ ...row, payload: JSON.parse(row.payload_json) }))
+      .find(row => row.record_type === 'sensor_health' && row.payload.event.event_type === 'OBSERVABILITY_RECOVERED');
+    assert.ok(recoveryHealth);
+    assert.equal(recoveryHealth.payload.details.observability_state, 'RECOVERED');
     assert.equal(ledger.verifyIntegrity().valid, true);
   } finally {
     ledger.close();

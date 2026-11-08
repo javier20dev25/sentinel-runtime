@@ -23,6 +23,15 @@ const MAX_QUEUE_BYTE_CAPACITY = 256 * 1024 * 1024;
 const DEFAULT_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30000;
 const FATAL_GRPC_CODES = new Set([3, 5, 7, 9, 12, 16]); // INVALID_ARGUMENT, NOT_FOUND, PERMISSION_DENIED, FAILED_PRECONDITION, UNIMPLEMENTED, UNAUTHENTICATED
+const OBSERVABILITY_STATES = Object.freeze({
+  HEALTHY: 'HEALTHY',
+  GAP_DETECTED: 'GAP_DETECTED',
+  DEGRADED: 'DEGRADED',
+  GAP_ACKNOWLEDGED: 'GAP_ACKNOWLEDGED',
+  RECOVERY_PENDING: 'RECOVERY_PENDING',
+  RECOVERED: 'RECOVERED'
+});
+const OBSERVABILITY_RECOVERY_EVIDENCE_KINDS = new Set(['OPERATOR_ACK', 'SENSOR_REPLAY_VERIFIED']);
 
 function parseTetragonAddress(address, platform = process.platform) {
   if (typeof address !== 'string' || address.length === 0 || address.length > 2048) throw new TypeError('Tetragon address is required');
@@ -154,6 +163,12 @@ class TetragonGrpcCollector {
     }
     this.sourceId = sourceIdForHost(this.hostId, this.bootId);
     this.collectorSessionId = crypto.randomUUID();
+    this.observabilityState = OBSERVABILITY_STATES.HEALTHY;
+    this.observabilityDegraded = false;
+    this.observabilityReason = null;
+    this.observabilitySince = null;
+    this.observabilityRecovery = null;
+    this.lastCommittedCheckpoint = null;
     this.metrics = {
       connections: 0,
       received: 0,
@@ -169,8 +184,141 @@ class TetragonGrpcCollector {
     };
   }
 
+  observabilityDetails() {
+    return {
+      observability_state: this.observabilityState,
+      observability_degraded: this.observabilityDegraded,
+      observability_reason: this.observabilityReason,
+      observability_since: this.observabilitySince
+    };
+  }
+
+  applyObservabilityState(state, reason = null, { evidence = null, persist = true } = {}) {
+    if (!Object.values(OBSERVABILITY_STATES).includes(state)) {
+      throw new TypeError(`Unsupported observability state: ${state}`);
+    }
+    const degraded = state !== OBSERVABILITY_STATES.HEALTHY && state !== OBSERVABILITY_STATES.RECOVERED;
+    const changed = this.observabilityState !== state || this.observabilityDegraded !== degraded;
+    this.observabilityState = state;
+    this.observabilityDegraded = degraded;
+    if (state === OBSERVABILITY_STATES.HEALTHY || state === OBSERVABILITY_STATES.RECOVERED) {
+      this.observabilityReason = null;
+    } else if (reason) {
+      this.observabilityReason = reason;
+    }
+    if (changed) this.observabilitySince = new Date().toISOString();
+    this.observabilityRecovery = evidence;
+    const engineReason = degraded ? (this.observabilityReason || 'Observability degraded') : null;
+    if (typeof this.decisionEngine?.setObservabilityState === 'function') {
+      this.decisionEngine.setObservabilityState(state, degraded, engineReason);
+    } else {
+      this.decisionEngine?.setObservabilityDegraded?.(degraded, engineReason);
+    }
+    if (persist) this.persistObservabilityState();
+  }
+
+  markObservabilityDegraded(reason, state = OBSERVABILITY_STATES.DEGRADED) {
+    const nextState = state === OBSERVABILITY_STATES.GAP_DETECTED
+      ? OBSERVABILITY_STATES.GAP_DETECTED
+      : OBSERVABILITY_STATES.DEGRADED;
+    if (this.observabilityState === nextState) {
+      if (!this.observabilityReason && reason) this.observabilityReason = reason;
+      return;
+    }
+    if (this.observabilityState === OBSERVABILITY_STATES.DEGRADED && nextState === OBSERVABILITY_STATES.GAP_DETECTED) {
+      return;
+    }
+    this.applyObservabilityState(nextState, reason || 'Observability degraded');
+  }
+
+  markObservabilityGapAcknowledged(evidence) {
+    if (!this.observabilityDegraded) throw new Error('Observability is not degraded');
+    if (this.observabilityState === OBSERVABILITY_STATES.RECOVERY_PENDING) {
+      throw new Error('Observability recovery is already pending');
+    }
+    const acknowledgement = normalizeObservabilityRecoveryEvidence(evidence, 'OPERATOR_ACK');
+    this.applyObservabilityState(OBSERVABILITY_STATES.GAP_ACKNOWLEDGED, 'GAP_ACKNOWLEDGED', { evidence: acknowledgement });
+    this.recordHealth('OBSERVABILITY_GAP_ACKNOWLEDGED', { ...this.observabilityDetails(), acknowledgement });
+  }
+
+  markObservabilityRecoveryPending(evidence) {
+    if (!this.observabilityDegraded) throw new Error('Observability is not degraded');
+    if (this.observabilityState === OBSERVABILITY_STATES.RECOVERY_PENDING) {
+      throw new Error('Observability recovery is already pending');
+    }
+    const recovery = normalizeObservabilityRecoveryEvidence(evidence, 'SENSOR_REPLAY_VERIFIED');
+    this.applyObservabilityState(OBSERVABILITY_STATES.RECOVERY_PENDING, 'RECOVERY_PENDING', { evidence: recovery });
+    this.recordHealth('OBSERVABILITY_RECOVERY_PENDING', { ...this.observabilityDetails(), recovery });
+  }
+
+  markObservabilityRecovered(evidence) {
+    if (this.observabilityState !== OBSERVABILITY_STATES.RECOVERY_PENDING) {
+      throw new Error('Observability recovery requires an explicit RECOVERY_PENDING state');
+    }
+    const recovery = normalizeObservabilityRecoveryEvidence(evidence, 'SENSOR_REPLAY_VERIFIED');
+    if (!sameObservabilityReplayEvidence(this.observabilityRecovery, recovery)) {
+      throw new Error('Observability recovery evidence does not match the pending replay verification');
+    }
+    this.applyObservabilityState(OBSERVABILITY_STATES.RECOVERED, null, { evidence: recovery });
+    this.recordHealth('OBSERVABILITY_RECOVERED', { ...this.observabilityDetails(), recovery });
+  }
+
+  persistObservabilityState() {
+    if (!this.lastCommittedCheckpoint) return;
+    const checkpoint = {
+      ...this.lastCommittedCheckpoint,
+      observability_state: this.observabilityState,
+      observability_reason: this.observabilityReason,
+      observability_since: this.observabilitySince,
+      observability_recovery: this.observabilityRecovery
+    };
+    this.ledger.recordEventsWithCheckpoint([], checkpoint);
+    this.lastCommittedCheckpoint = checkpoint;
+  }
+
+  restoreObservabilityState(checkpoint) {
+    if (!checkpoint) {
+      this.applyObservabilityState(OBSERVABILITY_STATES.HEALTHY, null, { persist: false });
+      return;
+    }
+    const priorState = typeof checkpoint.observability_state === 'string'
+      ? checkpoint.observability_state.slice(0, 64) : 'UNKNOWN';
+    if (priorState === OBSERVABILITY_STATES.GAP_ACKNOWLEDGED) {
+      this.applyObservabilityState(
+        OBSERVABILITY_STATES.GAP_ACKNOWLEDGED,
+        checkpoint.observability_reason || 'COLLECTOR_RESTART_PRIOR_OBSERVABILITY_GAP_ACKNOWLEDGED',
+        { evidence: checkpoint.observability_recovery || null, persist: false }
+      );
+      return;
+    }
+    this.applyObservabilityState(
+      OBSERVABILITY_STATES.DEGRADED,
+      `COLLECTOR_RESTART_PRIOR_OBSERVABILITY_${priorState}`,
+      { persist: false }
+    );
+  }
+
+  baselineCheckpoint() {
+    return {
+      source_id: this.sourceId,
+      provider: 'tetragon',
+      cursor_kind: 'GRPC_SEQUENCE',
+      stream_epoch: null,
+      sequence_number: '0',
+      last_source_event_key: null,
+      tetragon_version: null,
+      transport_protocol: null,
+      replay_supported: false,
+      upstream_acknowledgement: false,
+      stream_gap_state: 'UNKNOWN_UNTIL_SENSOR_REPLAY_EXISTS'
+    };
+  }
+
   async run(signal) {
     let previousCheckpoint = this.ledger.getLatestSourceCheckpoint(this.sourceId);
+    this.lastCommittedCheckpoint = checkpointWithoutLedgerSequence(previousCheckpoint) || this.baselineCheckpoint();
+    this.restoreObservabilityState(previousCheckpoint);
+    this.persistObservabilityState();
     let retryDelay = DEFAULT_BACKOFF_MS;
     let hadDisconnect = false;
     let intentionalStop = false;
@@ -179,7 +327,9 @@ class TetragonGrpcCollector {
       replay_supported: false,
       upstream_acknowledgement: false,
       previous_checkpoint: previousCheckpoint,
-      coverage: 'LIVE_EVENTS_AFTER_CONNECTION_ONLY'
+      prior_observability_state: previousCheckpoint?.observability_state || null,
+      coverage: 'LIVE_EVENTS_AFTER_CONNECTION_ONLY',
+      ...this.observabilityDetails()
     });
 
     while (!signal?.aborted && !intentionalStop) {
@@ -195,6 +345,9 @@ class TetragonGrpcCollector {
         }
         this.onStatus({ type: 'connected', tetragon_version: agentVersion, transport_protocol: connection.transportProtocol });
         this.metrics.connections++;
+        if (this.observabilityState === OBSERVABILITY_STATES.GAP_DETECTED) {
+          this.markObservabilityDegraded(this.observabilityReason || 'STREAM_GAP_UNKNOWN_NO_SENSOR_REPLAY');
+        }
         const streamGapState = previousCheckpoint || hadDisconnect ? 'UNKNOWN' : 'NO_PRIOR_LOCAL_CHECKPOINT';
         this.recordHealth('STREAM_CONNECTED', {
           source_id: this.sourceId,
@@ -204,7 +357,9 @@ class TetragonGrpcCollector {
           replay_supported: false,
           upstream_acknowledgement: false,
           prior_checkpoint: previousCheckpoint,
-          stream_gap_state: streamGapState
+          prior_observability_state: previousCheckpoint?.observability_state || null,
+          stream_gap_state: streamGapState,
+          ...this.observabilityDetails()
         });
         const result = await this.consumeConnection(connection, {
           agentVersion,
@@ -219,11 +374,13 @@ class TetragonGrpcCollector {
           if (result.queueDrops > 0) {
             this.metrics.queue_drops_lower_bound = (BigInt(this.metrics.queue_drops_lower_bound) + BigInt(result.queueDrops)).toString();
             this.metrics.queue_dropped_bytes_lower_bound = (BigInt(this.metrics.queue_dropped_bytes_lower_bound) + BigInt(result.queueDroppedBytes)).toString();
+            this.markObservabilityDegraded('COLLECTOR_QUEUE_OVERFLOW');
             this.recordHealth('COLLECTOR_QUEUE_OVERFLOW', {
               stream_epoch: streamEpoch,
               queue_drops_lower_bound: String(result.queueDrops),
               queue_dropped_bytes_lower_bound: String(result.queueDroppedBytes),
-              stream_gap_state: 'UNKNOWN'
+              stream_gap_state: 'UNKNOWN',
+              ...this.observabilityDetails()
             });
           }
           if (result.unprocessedAtLimit > 0) {
@@ -234,7 +391,8 @@ class TetragonGrpcCollector {
               unprocessed_events_at_limit_lower_bound: String(result.unprocessedAtLimit),
               unprocessed_bytes_at_limit_lower_bound: String(result.unprocessedBytesAtLimit),
               stream_gap_state: 'UNKNOWN',
-              source_replay_available: false
+              source_replay_available: false,
+              ...this.observabilityDetails()
             });
           }
           break;
@@ -247,12 +405,14 @@ class TetragonGrpcCollector {
         if (error.queueDrops > 0) {
           this.metrics.queue_drops_lower_bound = (BigInt(this.metrics.queue_drops_lower_bound) + BigInt(error.queueDrops)).toString();
           this.metrics.queue_dropped_bytes_lower_bound = (BigInt(this.metrics.queue_dropped_bytes_lower_bound) + BigInt(error.queueDroppedBytes || 0)).toString();
+          this.markObservabilityDegraded('COLLECTOR_QUEUE_OVERFLOW');
           this.recordHealth('COLLECTOR_QUEUE_OVERFLOW', {
             stream_epoch: streamEpoch,
             queue_drops_lower_bound: String(error.queueDrops),
             queue_dropped_bytes_lower_bound: String(error.queueDroppedBytes || 0),
             stream_gap_state: 'UNKNOWN',
-            source_replay_available: false
+            source_replay_available: false,
+            ...this.observabilityDetails()
           });
         }
         if (error.permanent || error.code === undefined || FATAL_GRPC_CODES.has(error.code)) {
@@ -261,13 +421,15 @@ class TetragonGrpcCollector {
         }
         hadDisconnect = true;
         previousCheckpoint = this.ledger.getLatestSourceCheckpoint(this.sourceId);
+        this.markObservabilityDegraded('STREAM_GAP_UNKNOWN_NO_SENSOR_REPLAY', OBSERVABILITY_STATES.GAP_DETECTED);
         this.recordHealth('STREAM_DISCONNECTED', {
           stream_epoch: streamEpoch,
           message: safeErrorMessage(error),
           grpc_code: error.code ?? null,
           stream_gap_state: 'UNKNOWN',
           source_replay_available: false,
-          last_committed_checkpoint: previousCheckpoint
+          last_committed_checkpoint: previousCheckpoint,
+          ...this.observabilityDetails()
         });
         this.onStatus({ type: 'reconnecting', delay_ms: retryDelay, grpc_code: error.code ?? null });
         await delayWithSignal(jitter(retryDelay), signal);
@@ -278,9 +440,13 @@ class TetragonGrpcCollector {
     }
 
     if (signal?.aborted && !intentionalStop) {
-      this.recordHealth('COLLECTOR_STOPPED', { reason: 'SIGNAL', source_id: this.sourceId });
+      this.recordHealth('COLLECTOR_STOPPED', { reason: 'SIGNAL', source_id: this.sourceId, ...this.observabilityDetails() });
     } else if (intentionalStop) {
-      this.recordHealth('COLLECTOR_STOPPED', { reason: this.maxEvents === null ? 'REQUESTED' : 'MAX_EVENTS', source_id: this.sourceId });
+      this.recordHealth('COLLECTOR_STOPPED', {
+        reason: this.maxEvents === null ? 'REQUESTED' : 'MAX_EVENTS',
+        source_id: this.sourceId,
+        ...this.observabilityDetails()
+      });
     }
     return { ...this.metrics, mode: 'observe-only', source_id: this.sourceId };
   }
@@ -357,11 +523,16 @@ class TetragonGrpcCollector {
         transport_protocol: session.transportProtocol,
         replay_supported: false,
         upstream_acknowledgement: false,
-        stream_gap_state: 'UNKNOWN_UNTIL_SENSOR_REPLAY_EXISTS'
+        stream_gap_state: 'UNKNOWN_UNTIL_SENSOR_REPLAY_EXISTS',
+        observability_state: this.observabilityState,
+        observability_reason: this.observabilityReason,
+        observability_since: this.observabilitySince,
+        observability_recovery: this.observabilityRecovery
       };
       const written = this.ledger.recordEventsWithCheckpoint(pending, checkpoint);
       this.metrics.persisted += written.events.length;
       this.metrics.duplicate_events_suppressed += written.duplicates;
+      this.lastCommittedCheckpoint = checkpoint;
       pending.length = 0;
     };
     const scheduleFlush = () => {
@@ -633,6 +804,111 @@ class TetragonGrpcCollector {
   }
 }
 
+function normalizeObservabilityRecoveryEvidence(evidence, expectedKind = null) {
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
+    throw new TypeError('Observability recovery evidence must be an object');
+  }
+  const kind = typeof evidence.kind === 'string' ? evidence.kind.trim() : '';
+  const reference = typeof evidence.reference === 'string' ? evidence.reference.trim() : '';
+  if (!OBSERVABILITY_RECOVERY_EVIDENCE_KINDS.has(kind)) {
+    throw new TypeError('Observability recovery evidence kind must be OPERATOR_ACK or SENSOR_REPLAY_VERIFIED');
+  }
+  if (expectedKind && kind !== expectedKind) {
+    throw new TypeError(`Observability recovery evidence kind must be ${expectedKind}`);
+  }
+  if (!reference || reference.length > 512) {
+    throw new TypeError('Observability recovery evidence reference must be a bounded non-empty string');
+  }
+  const normalized = {
+    kind,
+    reference,
+    observed_at: typeof evidence.observed_at === 'string' && evidence.observed_at
+      ? evidence.observed_at.slice(0, 64) : new Date().toISOString(),
+    notes: typeof evidence.notes === 'string' ? evidence.notes.slice(0, 1024) : null
+  };
+  if (kind === 'SENSOR_REPLAY_VERIFIED') {
+    const replayId = boundedObservabilityString(evidence.replay_id, 'replay_id', 256);
+    const windowStart = observabilityTimestamp(evidence.window_start, 'window_start');
+    const windowEnd = observabilityTimestamp(evidence.window_end, 'window_end');
+    if (Date.parse(windowStart) > Date.parse(windowEnd)) {
+      throw new TypeError('window_start must not be after window_end');
+    }
+    const sourceSequenceStart = observabilitySequence(evidence.source_sequence_start, 'source_sequence_start');
+    const sourceSequenceEnd = observabilitySequence(evidence.source_sequence_end, 'source_sequence_end');
+    if (BigInt(sourceSequenceStart) > BigInt(sourceSequenceEnd)) {
+      throw new TypeError('source_sequence_start must not be after source_sequence_end');
+    }
+    if (!Number.isSafeInteger(evidence.event_count) || evidence.event_count < 0) {
+      throw new TypeError('event_count must be a non-negative safe integer');
+    }
+    if (evidence.verified !== true) {
+      throw new TypeError('SENSOR_REPLAY_VERIFIED evidence requires verified=true');
+    }
+    const verificationMethod = boundedObservabilityString(evidence.verification_method, 'verification_method', 128);
+    const replayHash = evidence.replay_hash === undefined || evidence.replay_hash === null
+      ? null : boundedObservabilityString(evidence.replay_hash, 'replay_hash', 64).toLowerCase();
+    if (replayHash && !/^[a-f0-9]{64}$/.test(replayHash)) {
+      throw new TypeError('replay_hash must be a SHA-256 hex digest');
+    }
+    Object.assign(normalized, {
+      replay_id: replayId,
+      window_start: windowStart,
+      window_end: windowEnd,
+      source_sequence_start: sourceSequenceStart,
+      source_sequence_end: sourceSequenceEnd,
+      event_count: evidence.event_count,
+      verified: true,
+      verification_method: verificationMethod,
+      replay_hash: replayHash
+    });
+  }
+  return normalized;
+}
+
+function sameObservabilityReplayEvidence(pending, recovery) {
+  if (!pending || !recovery) return false;
+  const fields = [
+    'kind', 'reference', 'replay_id', 'window_start', 'window_end',
+    'source_sequence_start', 'source_sequence_end', 'event_count'
+  ];
+  if (fields.some(field => pending[field] !== recovery[field])) return false;
+  if (pending.replay_hash && recovery.replay_hash && pending.replay_hash !== recovery.replay_hash) return false;
+  return true;
+}
+
+function boundedObservabilityString(value, label, maxLength) {
+  if (typeof value !== 'string') throw new TypeError(`${label} must be a string`);
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > maxLength) {
+    throw new TypeError(`${label} must be a bounded non-empty string`);
+  }
+  return trimmed;
+}
+
+function observabilityTimestamp(value, label) {
+  const text = boundedObservabilityString(value, label, 64);
+  const parsed = Date.parse(text);
+  if (!Number.isFinite(parsed)) throw new TypeError(`${label} must be an ISO-8601 timestamp`);
+  return new Date(parsed).toISOString();
+}
+
+function observabilitySequence(value, label) {
+  if (typeof value === 'number' && !Number.isSafeInteger(value)) {
+    throw new TypeError(`${label} must be a safe integer or integer string`);
+  }
+  const text = typeof value === 'bigint' ? value.toString() : String(value ?? '').trim();
+  if (!/^\d+$/.test(text) || text.length > 64) {
+    throw new TypeError(`${label} must be a non-negative integer string`);
+  }
+  return BigInt(text).toString();
+}
+
+function checkpointWithoutLedgerSequence(checkpoint) {
+  if (!checkpoint) return null;
+  const { sequence, ...rest } = checkpoint;
+  return rest;
+}
+
 function safeErrorMessage(error) {
   return typeof error?.details === 'string' && error.details.length <= 1024
     ? error.details
@@ -670,5 +946,6 @@ module.exports = {
   parseTetragonAddress,
   sourceIdForHost,
   SUPPORTED_TETRAGON_VERSION,
-  DEFAULT_QUEUE_CAPACITY
+  DEFAULT_QUEUE_CAPACITY,
+  OBSERVABILITY_STATES
 };

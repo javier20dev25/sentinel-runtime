@@ -15,6 +15,36 @@ class DecisionEngine {
     this.allowAutomatedSuspension = options.allowAutomatedSuspension === true;
     this.allowAutomatedTermination = options.allowAutomatedTermination === true;
     this.requireHumanApprovalForR2 = options.requireHumanApprovalForR2 !== false;
+    this.observabilityState = 'HEALTHY';
+    this.observabilityDegraded = false;
+    this.observabilityReason = null;
+  }
+
+  /**
+   * Records telemetry-coverage state and degradation observed outside a single event
+   * (for example a collector stream gap with no sensor replay). Differentiated states:
+   * HEALTHY, GAP_DETECTED, DEGRADED, GAP_ACKNOWLEDGED, RECOVERY_PENDING, RECOVERED.
+   */
+  setObservabilityState(state, degraded, reason = null) {
+    this.observabilityState = typeof state === 'string' ? state : (degraded ? 'DEGRADED' : 'HEALTHY');
+    this.observabilityDegraded = degraded === true;
+    this.observabilityReason = this.observabilityDegraded
+      ? (reason || 'Observability degraded')
+      : null;
+  }
+
+  /**
+   * Records telemetry-coverage degradation observed outside a single event
+   * (for example a collector stream gap with no sensor replay). The degraded
+   * state persists until explicitly cleared, so detections after the gap
+   * cannot authorize destructive containment.
+   */
+  setObservabilityDegraded(degraded, reason = null) {
+    this.observabilityDegraded = degraded === true;
+    this.observabilityState = this.observabilityDegraded ? 'DEGRADED' : 'HEALTHY';
+    this.observabilityReason = this.observabilityDegraded
+      ? (reason || 'Observability degraded')
+      : null;
   }
 
   /**
@@ -55,7 +85,9 @@ class DecisionEngine {
       (identity.exec_id || identity.execId)
     );
 
-    const isObservabilityDegraded = observabilityStatus === 'DEGRADED' || Boolean(telemetryLoss);
+    const isObservabilityDegraded = this.observabilityDegraded ||
+      observabilityStatus === 'DEGRADED' ||
+      Boolean(telemetryLoss);
 
     // 1. Evaluate Deterministic Signal
     if (deterministicDeviation) {

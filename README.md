@@ -258,7 +258,7 @@ src/contracts/                   v1/v2 validators, materializer, and event-key p
 schemas/                         event contract schemas
 test/                            contract, integration, and hardening tests
 scripts/manual/                  explicit live sensor checks and fixture generation; never auto-run as tests
-docs/specs/                      provenance and architecture specifications
+docs/specs/                      provenance, L3 reports (see L3_F5_R1_CORRECTION_REPORT.md), and architecture
 docs/IMPLEMENTATION_STATUS.md    implemented scope and production gates
 ```
 
@@ -266,7 +266,7 @@ docs/IMPLEMENTATION_STATUS.md    implemented scope and production gates
 
 This repository is an early-stage, observe-only runtime published as an **unapproved development candidate (Phase 001C)**. It is **not** enterprise-ready, production-certified, or fully validated:
 
-- **Test suite results:** 226 total tests ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â **224 passed, 2 skipped** (Linux-only tests for TLS client key permissions and read-only Unix proxy) on Windows.
+- **Test suite results:** 260 total tests - **258 passed, 2 skipped** (Linux-only tests for TLS client key permissions and read-only Unix proxy) on Windows/WSL2.
 - **Linux execution status:** Under the local host environment, WSL2 invokes Windows `node.exe` through binary interop (`process.platform === 'win32'`); it does not constitute native Linux validation. Native Linux validation (`process.platform === 'linux'`) remains pending native guest Node.js provisioning or GitHub Actions CI execution.
 - **Contract status:** Event Contract v1 is frozen (`8c58cd96...`). Event Contract v2 is an unapproved candidate (`40ff2d68...`). Profile D (`RAW_PARTIAL_PROCESS_EVENT`) remains `PROVISIONAL ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â REQUIRES NORMATIVE REVIEW`. The provenance matrix status is `REOPENED ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â BLOCKED`.
 - **Sensor telemetry:** Exploratory observations (`tcp_sendmsg` and `cap_capable` on one Tetragon v1.8.0 WSL2 kernel) are micro-benchmark checks under `scripts/manual/` and do NOT constitute formal L3 sensor evidence. Phases 001D (live sensor validation) and 001E (durable queue architecture) are not started and remain unauthorized.
