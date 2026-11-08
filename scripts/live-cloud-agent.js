@@ -13,7 +13,12 @@ const { SentinelRuntimeCloudClient } = require('../src/cloud/cloud-client');
 const { BehaviorEngine } = require('../src/intelligence/behavior-engine');
 const { DecisionEngine } = require('../src/intelligence/decision-engine');
 
-const API_KEY = process.env.SENTINEL_RUNTIME_API_KEY || 'snt_rt_2tfeLePZADTwFPBUd3k6ij9toDPaRJYOu9zLNSFDcBY';
+const API_KEY = process.env.SENTINEL_RUNTIME_API_KEY;
+if (!API_KEY) {
+  console.error('❌ Error: SENTINEL_RUNTIME_API_KEY environment variable is required.');
+  console.error('   Export your dedicated snt_rt_ token: export SENTINEL_RUNTIME_API_KEY="snt_rt_..."');
+  process.exit(1);
+}
 const CLOUD_URL = process.env.SENTINEL_RUNTIME_API_URL || 'https://sentinel-psi-nine.vercel.app';
 
 async function runLiveAgent() {
