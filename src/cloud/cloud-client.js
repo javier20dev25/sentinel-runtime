@@ -5,7 +5,7 @@ const path = require('node:path');
 
 const RUNTIME_TOKEN_PREFIX = 'snt_rt_';
 const CLI_TOKEN_PREFIX = 'sntl_';
-const DEFAULT_CLOUD_ENDPOINT = 'https://sentinel-cloud.onrender.com';
+const DEFAULT_CLOUD_ENDPOINT = 'https://sentinel-psi-nine.vercel.app';
 const DEFAULT_TIMEOUT_MS = 5000;
 
 class SentinelRuntimeCloudClient {
@@ -17,7 +17,7 @@ class SentinelRuntimeCloudClient {
    * @param {number} [options.timeoutMs] - HTTP timeout in milliseconds
    */
   constructor(options = {}) {
-    this.endpoint = (options.endpoint || process.env.SENTINEL_CLOUD_ENDPOINT || DEFAULT_CLOUD_ENDPOINT).replace(/\/+$/, '');
+    this.endpoint = (options.endpoint || process.env.SENTINEL_RUNTIME_API_URL || process.env.SENTINEL_CLOUD_ENDPOINT || DEFAULT_CLOUD_ENDPOINT).replace(/\/+$/, '');
     this.timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
     this.apiKey = options.apiKey || process.env.SENTINEL_RUNTIME_API_KEY;
 
