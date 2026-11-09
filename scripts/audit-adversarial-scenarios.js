@@ -140,6 +140,37 @@ const SCENARIOS = [
       target: '203.0.113.50:2222',
       destClassification: 'External SSH/C2 Drop Point'
     }
+  },
+  {
+    id: 'SCENARIO_5_PROC_ROOT_SHADOW_THEFT',
+    name: 'Container Escape & Host /etc/shadow Exfiltration',
+    actor: 'pid:14200:container_agent',
+    identity: { host_id: 'host_1794126625946', boot_id: 'boot_wsl2_01', exec_id: 'exec_agent_200' },
+    steps: [
+      {
+        eventType: 'PROCESS_EXEC',
+        data: { binary: '/usr/local/bin/container_agent', pid: 14200, ppid: 14100 },
+        sourceEventKey: 'evt_5_exec_agent',
+        deltaMs: 0
+      },
+      {
+        eventType: 'FILE_READ',
+        data: { path: '/proc/1/root/etc/shadow', file_path: '/proc/1/root/etc/shadow', pid: 14200 },
+        sourceEventKey: 'evt_5_read_shadow',
+        deltaMs: 22
+      },
+      {
+        eventType: 'NETWORK_CONNECT',
+        data: { destination_ip: '192.0.2.77', host: '192.0.2.77', port: 4444 },
+        sourceEventKey: 'evt_5_net_exfil',
+        deltaMs: 65
+      }
+    ],
+    metadata: {
+      vector: 'Read access to host /etc/shadow via /proc/1/root followed by outbound connect to 192.0.2.77:4444',
+      target: '192.0.2.77:4444',
+      destClassification: 'Documentation RFC 5737 TEST-NET-1 (Simulated C2)'
+    }
   }
 ];
 
@@ -225,28 +256,100 @@ async function main() {
     console.log(`   ✓ Decision Action: ${decision?.requestedAction || 'OBSERVE_ONLY'} (autoContain=false)`);
     console.log(`   ⚡ Engine Latency:   ${totalLocalLatencyUs.toFixed(1)} µs (${(totalLocalLatencyUs / 1000).toFixed(3)} ms)`);
 
-    // Compute cryptographic evidence digest
-    const evidenceHash = crypto.createHash('sha256').update(JSON.stringify({
+    // Compute 64-char SHA-256 hashes for cryptographic fidelity
+    const makeSha256 = (str) => crypto.createHash('sha256').update(str).digest('hex');
+    const idempotencyKey = makeSha256(`snt_idemp_${scenario.id}_${Date.now()}_${Math.random()}`);
+    const evidenceHash = makeSha256(JSON.stringify({
       scenario: scenario.id,
       identity: scenario.identity,
       detection: primaryDetection,
       decision,
       timestamp: new Date().toISOString()
-    })).digest('hex');
+    }));
 
-    // Build the sanitized Incident Intelligence Envelope
+    // Ensure all step sourceEventKeys are 64-char SHA256 hex strings
+    const stepKeys = scenario.steps.map((s, idx) => makeSha256(`${scenario.id}_step_${idx}_${s.sourceEventKey}_${Date.now()}`));
+
+    // Build the compliant Sentinel Runtime Incident Envelope (sentinel-runtime-incident-v1)
     const envelope = {
       incident_id: `inc_${scenario.id.toLowerCase()}_${Date.now()}`,
+      idempotency_key: idempotencyKey,
       actor_type: 'WORKLOAD',
       actor_id: scenario.actor,
       rule_id: primaryDetection.chainType,
-      severity: primaryDetection.severity === 'HIGH' ? 'HIGH' : 'CRITICAL',
+      severity: primaryDetection.severity === 'HIGH' ? 'HIGH' : (primaryDetection.severity === 'CRITICAL' ? 'CRITICAL' : 'MEDIUM'),
       containment_level: 'R1',
       containment_status: 'OBSERVED',
       evidence_record_hash: evidenceHash,
       sanitized_envelope: {
+        contract_version: 'sentinel-runtime-incident-v1',
+        analysis_status: 'PENDING',
         scenario_id: scenario.id,
         scenario_name: scenario.name,
+        source: {
+          product: 'sentinel-runtime',
+          provider: 'tetragon',
+          event_keys: stepKeys,
+          observed_at: new Date(baseTime).toISOString()
+        },
+        observations: scenario.steps.map((step, idx) => ({
+          sequence: idx + 1,
+          event: {
+            event_type: step.eventType,
+            source_event_key: stepKeys[idx],
+            timestamps: {
+              source_timestamp: new Date(baseTime + step.deltaMs).toISOString(),
+              kernel_ns: `${(baseTime + step.deltaMs) * 1000000}`
+            },
+            process_identity: {
+              pid: step.data.pid || 10420,
+              ppid: step.data.ppid || 10400,
+              binary: step.data.binary || undefined,
+              binary_path: step.data.binary || undefined,
+              exec_id: scenario.identity.exec_id,
+              host_id: scenario.identity.host_id,
+              boot_id: scenario.identity.boot_id
+            },
+            payload: {
+              ...step.data,
+              destination_scope: step.data.destination_ip ? (step.data.destination_ip.startsWith('127.') ? 'LOOPBACK' : 'EXTERNAL') : undefined
+            }
+          },
+          execution_context: step.data.binary ? `${step.data.binary}` : undefined,
+          ledger_proof: {
+            algorithm: 'SENTINEL-EVIDENCE-LEDGER-V1/SHA-256',
+            previous_hash: idx === 0 ? '0000000000000000000000000000000000000000000000000000000000000000' : stepKeys[idx - 1],
+            record_hash: stepKeys[idx],
+            verification_status: 'AGENT_REPORTED_NOT_CLOUD_VERIFIED',
+            external_anchor: false
+          }
+        })),
+        decision: {
+          producer: 'sentinel-runtime',
+          severity: primaryDetection.severity,
+          confidence: primaryDetection.confidence,
+          rationale: primaryDetection.title,
+          matched_rules: [primaryDetection.chainType],
+          requested_action: decision?.requestedAction || 'OBSERVE_ONLY',
+          safety_gates: [],
+          observability_state: 'HEALTHY'
+        },
+        containment: {
+          level: 'R1',
+          status: 'OBSERVED',
+          requested_action: 'OBSERVE_ONLY',
+          actual_action: 'OBSERVE_ONLY',
+          details: {
+            mode: 'OBSERVE_ONLY',
+            reason: 'Observe-only mode active. Automated containment disabled (autoContain=false).'
+          }
+        },
+        evidence: {
+          record_hash: evidenceHash,
+          records: stepKeys.map((k, idx) => ({ sequence: idx + 1, record_hash: k })),
+          verification_status: 'AGENT_REPORTED_NOT_CLOUD_VERIFIED',
+          external_anchor: false
+        },
         detection: primaryDetection.chainType,
         severity: primaryDetection.severity,
         confidence_score: primaryDetection.confidence,
@@ -257,7 +360,7 @@ async function main() {
           role: 'WORKLOAD'
         },
         vector: scenario.metadata,
-        sequence: scenario.steps.map(s => ({
+        sequence: scenario.steps.map((s, idx) => ({
           type: s.eventType,
           delta_ms: s.deltaMs,
           binary: s.data.binary || undefined,
@@ -275,11 +378,6 @@ async function main() {
             'Direct process socket inheritance not confirmed by kernel kprobe trace.',
             'External timestamp authority (RFC 3161 TSA) is not anchored.'
           ]
-        },
-        containment: {
-          level: 'R1',
-          mode: 'OBSERVE_ONLY',
-          reason: 'Observe-only mode active. Automated containment disabled (autoContain=false).'
         },
         engine_benchmarks: {
           fsm_latency_us: evaluationLatencyUs,
@@ -318,7 +416,7 @@ async function main() {
   console.log('═'.repeat(75));
   console.table(auditResults);
   console.log('═'.repeat(75));
-  console.log('All 4 adversarial scenarios successfully evaluated and committed to Cloud.');
+  console.log(`All ${auditResults.length} adversarial scenarios successfully evaluated and committed to Cloud.`);
   console.log('View live in Cloud: https://sentinel-psi-nine.vercel.app/dashboard/runtime');
   console.log('═'.repeat(75));
 }
