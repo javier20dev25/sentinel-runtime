@@ -17,6 +17,8 @@ const { startTetragonReadOnlyProxy } = require('../src/collectors/tetragon-reado
 const { WorkloadProfile } = require('../src/profiler');
 const { ThreatLevel } = require('../src/types');
 const { ForensicExporter } = require('../src/custody');
+const { SentinelRuntimeCloudClient } = require('../src/cloud/cloud-client');
+const { RuntimeIncidentPublisher } = require('../src/cloud/incident-publisher');
 const { ProfileLearner } = require('../src/profiling');
 const { BehaviorEngine, DecisionEngine } = require('../src/intelligence');
 
@@ -110,6 +112,7 @@ Commands:
                                                Atomic file checkpoint/replay for an immutable input
   collect-tetragon [--address unix:///run/sentinel-runtime/tetragon-readonly.sock]
     --host-id <stable-id> (--boot-id <trusted-id> | --boot-id-file <path>) [--tls-ca <pem>]
+    [--cloud [--cloud-endpoint https://sentinel-cloud.example]]
     [--tls-client-cert <pem> --tls-client-key <pem>] [--expected-node-name <name>]
     [--max-events <n>] [--batch-size <n> --queue-capacity <n> --queue-mib <16..256>]
     [--profiles <json> --workload-id <id>] [--db <path>] [--capture-process-arguments]
@@ -496,8 +499,20 @@ async function collectTetragonCommand(options) {
   let result;
   try {
     let verifiedSensorVersion = null;
+    let incidentPublisher = null;
+    if (options.cloud) {
+      const cloudClient = new SentinelRuntimeCloudClient({ endpoint: options.cloudEndpoint });
+      if (!cloudClient.hasValidKey()) {
+        throw new Error('Cloud publishing requires a dedicated snt_rt_ host token from SENTINEL_RUNTIME_API_KEY or /etc/sentinel/runtime.conf');
+      }
+      incidentPublisher = new RuntimeIncidentPublisher({
+        ledger, client: cloudClient, hostId, bootId,
+        onStatus: status => process.stderr.write(`${JSON.stringify({ component: 'sentinel-cloud', ...status })}\n`)
+      });
+    }
     const collector = new TetragonGrpcCollector({
       ledger, hostId, bootId, workloadId: options.workloadId || 'unassigned', profiles: profileMap,
+      incidentPublisher,
       expectedNodeName: options.expectedNodeName || null, maxEvents,
       captureProcessArguments: options.captureProcessArguments === true,
       intelligence: options.intelligence === true,
@@ -511,6 +526,11 @@ async function collectTetragonCommand(options) {
       onStatus: status => {
         if (status.type === 'connected' && /^v?1\.8\.0$/.test(status.tetragon_version || '')) verifiedSensorVersion = status.tetragon_version;
         else if (status.type === 'reconnecting') verifiedSensorVersion = null;
+        if (incidentPublisher && status.type === 'connected') {
+          void incidentPublisher.sendHeartbeat({ status: 'HEALTHY', tetragonVersion: status.tetragon_version, runtimeVersion: '0.2.0' });
+        } else if (incidentPublisher && status.type === 'reconnecting') {
+          void incidentPublisher.sendHeartbeat({ status: 'DEGRADED' });
+        }
         process.stderr.write(`${JSON.stringify({ component: 'tetragon-collector', ...status })}\n`);
       }
     });
@@ -549,7 +569,8 @@ async function collectTetragonCommand(options) {
     process.removeListener('SIGTERM', onSigterm);
     ledger.close();
   }
-  console.log(JSON.stringify({ ...result, address, metrics_polling_enabled: Boolean(options.metricsUrl), metrics_url: options.metricsUrl || null, mode: 'observe-only' }, null, 2));
+  console.log(JSON.stringify({ ...result, address, cloud_publishing_enabled: options.cloud === true,
+    metrics_polling_enabled: Boolean(options.metricsUrl), metrics_url: options.metricsUrl || null, mode: 'observe-only' }, null, 2));
   return 0;
 }
 

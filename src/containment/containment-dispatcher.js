@@ -3,6 +3,35 @@
 const { performance } = require('node:perf_hooks');
 const { ContainmentLevel, ContainmentStatus } = require('./types');
 
+function normalizeAdapterOutcome(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { success: false, code: 'INVALID_ADAPTER_RESULT' };
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return { success: false, code: 'INVALID_ADAPTER_RESULT' };
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (Object.values(descriptors).some(descriptor => !Object.hasOwn(descriptor, 'value'))) {
+    return { success: false, code: 'INVALID_ADAPTER_RESULT' };
+  }
+  const read = key => descriptors[key]?.value;
+  const success = read('success') === true;
+  const result = { success };
+  const actionTaken = read('actionTaken');
+  const code = read('code');
+  const targetPid = read('targetPid');
+  const timestamp = read('timestamp');
+  if (typeof actionTaken === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/.test(actionTaken)) {
+    result.actionTaken = actionTaken;
+  } else if (success) {
+    result.actionTaken = 'ACTION_REPORTED';
+  }
+  if (typeof code === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/.test(code)) result.code = code;
+  if (Number.isSafeInteger(targetPid) && targetPid > 1) result.targetPid = targetPid;
+  if (typeof timestamp === 'string' && timestamp.length <= 48 && Number.isFinite(Date.parse(timestamp))) result.timestamp = timestamp;
+  if (!success && !result.code) result.code = 'ADAPTER_REPORTED_FAILURE';
+  return result;
+}
+
 /**
  * ContainmentDispatcher coordinates runtime remediation decisions.
  *
@@ -114,18 +143,19 @@ class ContainmentDispatcher {
         if (!this.adapter) {
           throw new Error(`No containment adapter configured for level: ${requestedLevel}`);
         }
-        outcome = await this.adapter.execute({
+        const adapterResult = await this.adapter.execute({
           level: requestedLevel,
           targetIdentity,
           plannedRecordHash
         });
+        outcome = normalizeAdapterOutcome(adapterResult);
+        if (!outcome.success) finalStatus = ContainmentStatus.FAILED;
       }
     } catch (err) {
       finalStatus = ContainmentStatus.FAILED;
       outcome = {
         success: false,
-        error: err.message,
-        code: err.code || 'ADAPTER_ERROR'
+        code: err && typeof err.code === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/.test(err.code) ? err.code : 'ADAPTER_ERROR'
       };
     }
 

@@ -13,6 +13,7 @@ module.exports = {
   ...require('./adapters/tetragon-json'),
   ...require('./containment'),
   ...require('./cloud/cloud-client'),
+  ...require('./cloud/incident-publisher'),
   ...require('./custody'),
   ...require('./profiling'),
   ...require('./intelligence')

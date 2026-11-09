@@ -163,6 +163,54 @@ describe('ContainmentDispatcher - Safety & Transactional Lifecycle', () => {
     assert.equal(integrity.valid, true);
   });
 
+  it('records adapter-declared failure as failed instead of executed', async () => {
+    const ledger = new EvidenceLedger(':memory:');
+    const dispatcher = new ContainmentDispatcher({
+      ledger,
+      dryRun: false,
+      adapter: { execute: async () => ({ success: false, actionTaken: 'SIGNAL_REJECTED', code: 'EPERM' }) }
+    });
+    const result = await dispatcher.dispatch({
+      incidentId: 'incident-adapter-failure',
+      ruleId: 'TEST_RULE',
+      requestedLevel: ContainmentLevel.R2_PROCESS_SUSPEND,
+      targetIdentity: { pid: 4242 }
+    });
+    assert.equal(result.status, ContainmentStatus.FAILED);
+    assert.equal(result.outcome.success, false);
+    const resultRecord = ledger.getRecords({ limit: 10 }).find(row => row.record_type === 'containment_result');
+    assert.equal(JSON.parse(resultRecord.payload_json).status, ContainmentStatus.FAILED);
+    ledger.close();
+  });
+
+  it('keeps untrusted adapter output out of the host action receipt', async () => {
+    const ledger = new EvidenceLedger(':memory:');
+    const dispatcher = new ContainmentDispatcher({
+      ledger,
+      dryRun: false,
+      adapter: { execute: async () => ({
+        success: true,
+        actionTaken: 'SIGSTOP',
+        targetPid: 4242,
+        details: 'untrusted command output: api-key=secret',
+        stdout: 'untrusted output'
+      }) }
+    });
+    const result = await dispatcher.dispatch({
+      incidentId: 'incident-adapter-success',
+      ruleId: 'TEST_RULE',
+      requestedLevel: ContainmentLevel.R2_PROCESS_SUSPEND,
+      targetIdentity: { pid: 4242 }
+    });
+    assert.equal(result.status, ContainmentStatus.EXECUTED);
+    assert.equal(result.outcome.actionTaken, 'SIGSTOP');
+    assert.equal('details' in result.outcome, false);
+    const records = JSON.stringify(ledger.getRecords({ limit: 10 }));
+    assert.equal(records.includes('untrusted command output'), false);
+    assert.equal(records.includes('api-key=secret'), false);
+    ledger.close();
+  });
+
   it('protects PID 1 and self-PID from accidental targeting', async () => {
     const adapter = new LocalProcessContainmentAdapter({ dryRun: false });
 

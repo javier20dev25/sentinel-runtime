@@ -148,6 +148,7 @@ class TetragonGrpcCollector {
     this.engine = options.engine || new BehavioralSequenceEngine();
     this.behaviorEngine = options.behaviorEngine || null;
     this.decisionEngine = options.decisionEngine || null;
+    this.incidentPublisher = options.incidentPublisher || null;
     if (options.intelligence && !this.behaviorEngine) {
       this.behaviorEngine = new BehaviorEngine(options);
       this.decisionEngine = options.decisionEngine || new DecisionEngine(options);
@@ -180,7 +181,10 @@ class TetragonGrpcCollector {
       rate_limit_reports: 0,
       queue_drops_lower_bound: '0',
       queue_dropped_bytes_lower_bound: '0',
-      unprocessed_at_limit_lower_bound: '0'
+      unprocessed_at_limit_lower_bound: '0',
+      cloud_incidents_queued: 0,
+      cloud_incidents_sent: 0,
+      cloud_delivery_failures: 0
     };
   }
 
@@ -331,6 +335,7 @@ class TetragonGrpcCollector {
       coverage: 'LIVE_EVENTS_AFTER_CONNECTION_ONLY',
       ...this.observabilityDetails()
     });
+    if (this.incidentPublisher) void this.flushCloudPending();
 
     while (!signal?.aborted && !intentionalStop) {
       let connection;
@@ -448,6 +453,7 @@ class TetragonGrpcCollector {
         ...this.observabilityDetails()
       });
     }
+    if (this.incidentPublisher) await this.flushCloudPending();
     return { ...this.metrics, mode: 'observe-only', source_id: this.sourceId };
   }
 
@@ -530,10 +536,22 @@ class TetragonGrpcCollector {
         observability_recovery: this.observabilityRecovery
       };
       const written = this.ledger.recordEventsWithCheckpoint(pending, checkpoint);
+      const committedEntries = pending.slice();
       this.metrics.persisted += written.events.length;
       this.metrics.duplicate_events_suppressed += written.duplicates;
       this.lastCommittedCheckpoint = checkpoint;
       pending.length = 0;
+      if (this.incidentPublisher) {
+        for (const entry of committedEntries) {
+          try {
+            if (this.incidentPublisher.consider(entry, this.observabilityState)) this.metrics.cloud_incidents_queued++;
+          } catch (error) {
+            this.metrics.cloud_delivery_failures++;
+            this.onStatus({ type: 'cloud_delivery_queue_failed', code: error.code || 'LOCAL_OUTBOX_ERROR' });
+          }
+        }
+        if (this.incidentPublisher.pendingCount() > 0) void this.flushCloudPending();
+      }
     };
     const scheduleFlush = () => {
       if (!flushTimer) {
@@ -791,6 +809,19 @@ class TetragonGrpcCollector {
       session.signal?.removeEventListener('abort', onAbort);
       if (!terminal) cancel();
       if (failed) this.onStatus({ type: 'stream_failed', stream_epoch: session.streamEpoch });
+    }
+  }
+
+  async flushCloudPending() {
+    if (!this.incidentPublisher) return { sent: 0, failed: 0, queued: 0 };
+    try {
+      const result = await this.incidentPublisher.flushPending();
+      this.metrics.cloud_incidents_sent += result.sent;
+      this.metrics.cloud_delivery_failures += result.failed;
+      return result;
+    } catch {
+      this.metrics.cloud_delivery_failures++;
+      return { sent: 0, failed: 1, queued: this.incidentPublisher.pendingCount() };
     }
   }
 

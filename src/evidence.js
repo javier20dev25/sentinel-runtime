@@ -302,6 +302,38 @@ class EvidenceLedger {
     `).all(limit);
   }
 
+  getEventRecordsBySourceEventKeys(sourceEventKeys) {
+    if (!Array.isArray(sourceEventKeys) || sourceEventKeys.length === 0) return [];
+    const keys = [...new Set(sourceEventKeys)];
+    if (keys.length > 32 || keys.some(key => typeof key !== 'string' || !/^[a-f0-9]{64}$/i.test(key))) {
+      throw new TypeError('Source event keys must be at most 32 SHA-256 hex digests');
+    }
+    const placeholders = keys.map(() => '?').join(', ');
+    const rows = this.db.prepare(`
+      SELECT sequence, timestamp, record_type, payload_json, previous_hash, record_hash
+      FROM evidence_records
+      WHERE record_type = 'event'
+        AND lower(json_extract(payload_json, '$.event.source_event_key')) IN (${placeholders})
+      ORDER BY sequence ASC
+    `).all(...keys.map(key => key.toLowerCase()));
+    return rows.map(row => ({
+      ...row,
+      sequence: Number(row.sequence),
+      payload: JSON.parse(row.payload_json),
+      event: JSON.parse(row.payload_json).event
+    }));
+  }
+
+  getCloudDeliveryRecords(options = {}) {
+    const limit = Number.isSafeInteger(options.limit) && options.limit > 0 ? Math.min(options.limit, 20000) : 20000;
+    return this.db.prepare(`
+      SELECT sequence, timestamp, record_type, payload_json, previous_hash, record_hash
+      FROM evidence_records
+        WHERE record_type IN ('cloud_delivery_pending', 'cloud_delivery_retry', 'cloud_delivery_ack')
+      ORDER BY sequence ASC LIMIT ?
+    `).all(limit);
+  }
+
   verifyIntegrity() {
     const rows = this.db.prepare(`
       SELECT sequence, timestamp, record_type, payload_json, previous_hash, record_hash

@@ -7,6 +7,7 @@ const RUNTIME_TOKEN_PREFIX = 'snt_rt_';
 const CLI_TOKEN_PREFIX = 'sntl_';
 const DEFAULT_CLOUD_ENDPOINT = 'https://sentinel-psi-nine.vercel.app';
 const DEFAULT_TIMEOUT_MS = 5000;
+const MAX_RESPONSE_BYTES = 16 * 1024;
 
 class SentinelRuntimeCloudClient {
   /**
@@ -17,9 +18,10 @@ class SentinelRuntimeCloudClient {
    * @param {number} [options.timeoutMs] - HTTP timeout in milliseconds
    */
   constructor(options = {}) {
-    this.endpoint = (options.endpoint || process.env.SENTINEL_RUNTIME_API_URL || process.env.SENTINEL_CLOUD_ENDPOINT || DEFAULT_CLOUD_ENDPOINT).replace(/\/+$/, '');
+    this.endpoint = normalizeEndpoint(options.endpoint || process.env.SENTINEL_RUNTIME_API_URL || process.env.SENTINEL_CLOUD_ENDPOINT || DEFAULT_CLOUD_ENDPOINT);
     this.timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
     this.apiKey = options.apiKey || process.env.SENTINEL_RUNTIME_API_KEY;
+    if (typeof this.apiKey === 'string') this.apiKey = this.apiKey.trim();
 
     if (!this.apiKey && options.configPath) {
       this.apiKey = this._loadApiKeyFromConfig(options.configPath);
@@ -88,7 +90,7 @@ class SentinelRuntimeCloudClient {
       loss_events_count: data.lossEventsCount || 0,
     };
 
-    return this._post('/api/runtime/heartbeat', payload);
+    return this._post('/api/runtime/heartbeat', payload, { expectedHeartbeat: true });
   }
 
   /**
@@ -104,10 +106,13 @@ class SentinelRuntimeCloudClient {
       return { ok: false, error: 'INVALID_ENVELOPE_OBJECT' };
     }
 
-    return this._post('/api/runtime/incidents', envelope);
+    return this._post('/api/runtime/incidents', envelope, {
+      expectedClientIncidentId: envelope.incident_id,
+      expectedIdempotencyKey: envelope.idempotency_key
+    });
   }
 
-  async _post(urlPath, payload) {
+  async _post(urlPath, payload, expectations = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
@@ -117,29 +122,48 @@ class SentinelRuntimeCloudClient {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${this.apiKey}`,
-          'User-Agent': 'sentinel-runtime/0.1.0'
+          'User-Agent': 'sentinel-runtime/0.2.0'
         },
+        redirect: 'error',
         body: JSON.stringify(payload),
         signal: controller.signal
       });
 
-      const responseText = await response.text();
-      let parsed = null;
-      try {
-        parsed = JSON.parse(responseText);
-      } catch {
-        parsed = { raw: responseText };
-      }
+      const responseText = await readBoundedResponse(response, MAX_RESPONSE_BYTES);
+      let parsed;
+      try { parsed = JSON.parse(responseText); }
+      catch { return { ok: false, offline: false, error: 'INVALID_CLOUD_RESPONSE', status: response.status }; }
 
       if (!response.ok) {
         return {
           ok: false,
           status: response.status,
-          error: parsed?.error || `HTTP ${response.status}`,
+          error: typeof parsed?.error === 'string' ? parsed.error.slice(0, 256) : `HTTP ${response.status}`,
           offline: false
         };
       }
 
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || parsed.ok !== true) {
+        return { ok: false, offline: false, error: 'INVALID_CLOUD_RESPONSE', status: response.status };
+      }
+      if (expectations.expectedClientIncidentId &&
+          parsed.client_incident_id !== expectations.expectedClientIncidentId) {
+        return { ok: false, offline: false, error: 'CLOUD_RESPONSE_ID_MISMATCH', status: response.status };
+      }
+      if (expectations.expectedClientIncidentId &&
+          (typeof parsed.incident_id !== 'string' || !Number.isFinite(Date.parse(parsed.recorded_at)))) {
+        return { ok: false, offline: false, error: 'INVALID_CLOUD_RESPONSE', status: response.status };
+      }
+      if (expectations.expectedClientIncidentId &&
+          (parsed.analysis_status !== 'NOT_REQUESTED' || typeof parsed.duplicate !== 'boolean' ||
+            parsed.idempotency_key !== expectations.expectedIdempotencyKey)) {
+        return { ok: false, offline: false, error: 'INVALID_CLOUD_RESPONSE', status: response.status };
+      }
+      if (expectations.expectedHeartbeat &&
+          (typeof parsed.host_id !== 'string' || typeof parsed.device_name !== 'string' || typeof parsed.environment !== 'string' ||
+            !['HEALTHY', 'DEGRADED', 'DISCONNECTED', 'CONTAINED'].includes(parsed.status))) {
+        return { ok: false, offline: false, error: 'INVALID_CLOUD_RESPONSE', status: response.status };
+      }
       return { ok: true, data: parsed };
     } catch (err) {
       return {
@@ -151,6 +175,49 @@ class SentinelRuntimeCloudClient {
       clearTimeout(timer);
     }
   }
+}
+
+function normalizeEndpoint(value) {
+  let parsed;
+  try { parsed = new URL(value); }
+  catch { throw new TypeError('Sentinel Cloud endpoint must be a valid HTTPS URL'); }
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  const localHttp = parsed.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(hostname);
+  if ((parsed.protocol !== 'https:' && !localHttp) || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new TypeError('Sentinel Cloud endpoint must use HTTPS and cannot contain credentials, query strings, or fragments');
+  }
+  return parsed.toString().replace(/\/+$/, '');
+}
+
+async function readBoundedResponse(response, maxBytes) {
+  const declaredLength = Number(response.headers?.get?.('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    await response.body?.cancel?.();
+    throw new Error('CLOUD_RESPONSE_TOO_LARGE');
+  }
+  if (!response.body?.getReader) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, 'utf8') > maxBytes) throw new Error('CLOUD_RESPONSE_TOO_LARGE');
+    return text;
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error('CLOUD_RESPONSE_TOO_LARGE');
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  return Buffer.concat(chunks, total).toString('utf8');
 }
 
 module.exports = {
