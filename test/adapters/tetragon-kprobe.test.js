@@ -81,6 +81,30 @@ test('Tetragon TCP connect hooks use the explicit sockaddr target and keep retur
   assert.equal(Object.hasOwn(result.data, 'connected'), false);
 });
 
+test('Tetragon TCP connect accepts a missing sockaddr label only when the argument is unambiguous', () => {
+  const socket = { sock_arg: { family: 'AF_INET', saddr: '192.0.2.10', sport: 4567 }, label: 'sentinel_socket' };
+  const sockaddr = { sockaddr_arg: { family: 'AF_INET', addr: '198.51.100.20', port: 443 } };
+  const attempt = normalize(event('tcp_v4_connect', [socket, sockaddr]));
+  assert.equal(attempt.supported, true);
+  assert.equal(attempt.data.destination_ip, '198.51.100.20');
+  assert.equal(attempt.data.destination_port, 443);
+
+  const ambiguous = normalize(event('tcp_v4_connect', [
+    socket,
+    { sockaddr_arg: { family: 'AF_INET', addr: '198.51.100.20', port: 443 } },
+    { sockaddr_arg: { family: 'AF_INET', addr: '203.0.113.8', port: 8443 } }
+  ]));
+  assert.equal(ambiguous.supported, false);
+  assert.equal(ambiguous.reason, 'KPROBE_CONNECT_DESTINATION_UNAVAILABLE');
+
+  const mislabeled = normalize(event('tcp_v4_connect', [
+    socket,
+    { sockaddr_arg: { family: 'AF_INET', addr: '198.51.100.20', port: 443 }, label: 'sentinel_size' }
+  ]));
+  assert.equal(mislabeled.supported, false);
+  assert.equal(mislabeled.reason, 'KPROBE_CONNECT_DESTINATION_UNAVAILABLE');
+});
+
 test('Tetragon tcp_sendmsg return event is a verifiable raw event with bounded evidence fields', () => {
   const args = [
     { size_arg: '4096', label: 'sentinel_size' },

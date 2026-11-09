@@ -63,6 +63,10 @@ function normalizeKprobe(record, body, process, rawPayload, rawHash, timestamp, 
     const matches = args.filter(argument => argument && typeof argument === 'object' && argument.label === label);
     return matches.length === 1 ? matches[0] : null;
   };
+  const unlabeledArgument = field => {
+    const matches = args.filter(argument => argument && typeof argument === 'object' && Object.hasOwn(argument, field) && (argument.label === undefined || argument.label === null || argument.label === ''));
+    return matches.length === 1 ? matches[0] : null;
+  };
   const hasReturn = body.return !== undefined && body.return !== null;
   if (typeof functionName !== 'string' || functionName.length === 0) return unsupported(record, rawPayload, 'KPROBE_FUNCTION_NAME_MISSING');
   if (timestamp === null) return unsupported(record, rawPayload, 'KPROBE_TIMESTAMP_MISSING');
@@ -116,7 +120,11 @@ function normalizeKprobe(record, body, process, rawPayload, rawHash, timestamp, 
       read_status: 'RETURN_OBSERVED'
     };
   } else if (functionName === 'tcp_v4_connect' || functionName === 'tcp_v6_connect') {
-    const endpoint = connectEndpoint(labeled('sentinel_socket'), labeled('sentinel_sockaddr'), functionName);
+    const endpoint = connectEndpoint(
+      labeled('sentinel_socket') || unlabeledArgument('sock_arg'),
+      labeled('sentinel_sockaddr') || unlabeledArgument('sockaddr_arg'),
+      functionName
+    );
     if (!endpoint) return unsupported(record, rawPayload, 'KPROBE_CONNECT_DESTINATION_UNAVAILABLE');
     if (hasReturn) {
       const returnCode = signedArgument(body.return, ['int_arg', 'long_arg']);
