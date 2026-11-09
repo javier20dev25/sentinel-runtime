@@ -5,6 +5,7 @@ const { canonicalJson } = require('../contracts/canonical-json');
 
 const MAX_CORRELATED_EVENTS = 32;
 const MAX_ENVELOPE_BYTES = 28 * 1024;
+const MAX_COMMAND_DISPLAY_CHARS = 2048;
 const SENSITIVE_KEY = /(^|[_-])(authorization|token|password|passwd|secret|api[_-]?key|private[_-]?key|command[_-]?line|argv|arguments?|process[_-]?args|environment|env|stdin|stdout|stderr|output|payload[_-]?bytes)([_-]|$)/i;
 
 function severityFor(value) {
@@ -40,6 +41,56 @@ function redact(value, depth = 0) {
     output[key] = redact(item, depth + 1);
   }
   return output;
+}
+
+function commandDisplay(event) {
+  const eventType = String(event?.event_type || event?.eventType || '').toUpperCase();
+  if (eventType !== 'PROCESS_EXEC') return null;
+  const identity = event.process_identity || event.processIdentity || {};
+  const payload = event.payload || event.data || {};
+  const binary = typeof identity.executable_path === 'string' ? identity.executable_path
+    : typeof identity.binary_path === 'string' ? identity.binary_path
+      : typeof payload.binary === 'string' ? payload.binary : '';
+  const argumentValue = typeof payload.arguments_raw === 'string' ? payload.arguments_raw
+    : Array.isArray(payload.argv) ? payload.argv.filter(value => typeof value === 'string').slice(0, 64).join(' ')
+      : typeof identity.arguments_raw === 'string' ? identity.arguments_raw : '';
+  const raw = [binary, argumentValue].filter(Boolean).join(' ').slice(0, MAX_COMMAND_DISPLAY_CHARS * 4);
+  const result = redactCommandText(raw);
+  const executable = binary ? redactCommandText(binary).text.slice(0, 512) : null;
+  return {
+    executable_path: executable || null,
+    command_display: result.text || null,
+    arguments_capture_status: typeof payload.arguments_capture_status === 'string'
+      ? payload.arguments_capture_status.slice(0, 48) : 'NOT_SUPPLIED',
+    redacted_item_count: result.redactedItemCount,
+    truncated: result.truncated
+  };
+}
+
+function redactCommandText(value) {
+  let text = String(value || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+  let redactedItemCount = 0;
+  const patterns = [
+    { regex: /((?:^|\s)--?(?:token|access[-_]?token|api[-_]?key|password|passwd|secret|client[-_]?secret|access[-_]?key|private[-_]?key|authorization|credential|user|username)(?:=|\s+))(?:(?:"[^"]*")|(?:'[^']*')|[^\s]+)/gi, replace: '$1[REDACTED]' },
+    { regex: /((?:^|\s)(?:-u|--user)(?:=|\s+))(?:(?:"[^"]*")|(?:'[^']*')|[^\s]+)/gi, replace: '$1[REDACTED]' },
+    { regex: /((?:^|\s)[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|CLIENT_SECRET)[A-Z0-9_]*=)(?:(?:"[^"]*")|(?:'[^']*')|[^\s]+)/gi, replace: '$1[REDACTED]' },
+    { regex: /((?:authorization\s*[:=]\s*)?bearer\s+)[A-Za-z0-9._~+/-]{8,}/gi, replace: '$1[REDACTED]' },
+    { regex: /(https?:\/\/)[^/\s:@]+:[^@\s/]+(@)/gi, replace: '$1[REDACTED]$2' },
+    { regex: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, replace: '[REDACTED_JWT]' },
+    { regex: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, replace: '[REDACTED_AWS_KEY]' },
+    { regex: /\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,})\b/g, replace: '[REDACTED_TOKEN]' },
+    { regex: /((?:["']?(?:token|password|passwd|secret|api[_-]?key|private[_-]?key)["']?\s*[:=]\s*["']?))([^"'&,\s}]+)/gi, replace: '$1[REDACTED]' }
+  ];
+  for (const pattern of patterns) {
+    text = text.replace(pattern.regex, (...args) => {
+      redactedItemCount++;
+      return args[0].replace(pattern.regex, pattern.replace);
+    });
+  }
+  text = text.replace(/(\/home\/)[^/\s]+/g, '$1<user>').replace(/(\/mnt\/c\/Users\/)[^/\s]+/gi, '$1<user>');
+  const truncated = text.length > MAX_COMMAND_DISPLAY_CHARS;
+  if (truncated) text = `${text.slice(0, MAX_COMMAND_DISPLAY_CHARS - 1)}…`;
+  return { text, redactedItemCount, truncated };
 }
 
 function readRule(decision, event) {
@@ -98,17 +149,21 @@ function buildRuntimeIncidentEnvelope({ entry, records, hostId, bootId, observab
       event_keys: eventKeys,
       observed_at: trigger.event?.timestamps?.source_timestamp || trigger.event?.timestamp || null
     },
-    observations: evidenceRecords.map(record => ({
-      sequence: record.sequence,
-      event: redact(record.event),
-      ledger_proof: {
-        algorithm: 'SENTINEL-EVIDENCE-LEDGER-V1/SHA-256',
-        previous_hash: record.previous_hash,
-        record_hash: record.record_hash,
-        verification_status: 'AGENT_REPORTED_NOT_CLOUD_VERIFIED',
-        external_anchor: false
-      }
-    })),
+    observations: evidenceRecords.map(record => {
+      const executionContext = commandDisplay(record.event || {});
+      return {
+        sequence: record.sequence,
+        event: redact(record.event),
+        ...(executionContext ? { execution_context: executionContext } : {}),
+        ledger_proof: {
+          algorithm: 'SENTINEL-EVIDENCE-LEDGER-V1/SHA-256',
+          previous_hash: record.previous_hash,
+          record_hash: record.record_hash,
+          verification_status: 'AGENT_REPORTED_NOT_CLOUD_VERIFIED',
+          external_anchor: false
+        }
+      };
+    }),
     decision: {
       producer: 'sentinel-runtime',
       severity: severityFor(decision.threatLevel ?? decision.threat_level),

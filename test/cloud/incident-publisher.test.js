@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EvidenceLedger } = require('../../src/evidence');
-const { RuntimeIncidentPublisher } = require('../../src/cloud/incident-publisher');
+const { RuntimeIncidentPublisher, buildRuntimeIncidentEnvelope } = require('../../src/cloud/incident-publisher');
 
 function sampleEntry() {
   return {
@@ -52,6 +52,38 @@ test('publisher builds a factual envelope from committed evidence and redacts co
   assert.equal(json.includes('--password=secret'), false);
 
   ledger.close();
+});
+
+test('publisher includes a bounded command display after redacting secrets and home usernames', () => {
+  const event = {
+    event_type: 'PROCESS_EXEC',
+    source_event_key: 'd'.repeat(64),
+    process_identity: { exec_id: 'exec-command', pid: 77, executable_path: '/usr/bin/curl' },
+    payload: {
+      arguments_raw: '-H "Authorization: Bearer super-secret-token-value" --api-key=another-secret https://alice:password@example.test/mnt/c/Users/sleyt/job.sh',
+      arguments_capture_status: 'RAW_STRING_ONLY'
+    }
+  };
+  const entry = { event, decision: { threatLevel: 'HIGH', reason: 'Process execution observed' } };
+  const envelope = buildRuntimeIncidentEnvelope({
+    entry,
+    records: [{ sequence: 7, event, previous_hash: 'a'.repeat(64), record_hash: 'b'.repeat(64) }],
+    hostId: 'host-1', bootId: 'boot-1'
+  });
+  const observation = envelope.sanitized_envelope.observations[0];
+  const json = JSON.stringify(envelope);
+
+  assert.match(observation.execution_context.command_display, /\/usr\/bin\/curl/);
+  assert.match(observation.execution_context.command_display, /Authorization: Bearer \[REDACTED\]/i);
+  assert.match(observation.execution_context.command_display, /\/mnt\/c\/Users\/<user>/i);
+  assert.equal(observation.execution_context.arguments_capture_status, 'RAW_STRING_ONLY');
+  assert.ok(observation.execution_context.redacted_item_count >= 3);
+  assert.equal(json.includes('super-secret-token-value'), false);
+  assert.equal(json.includes('another-secret'), false);
+  assert.equal(json.includes('alice:password'), false);
+  assert.equal(json.includes('alice'), false);
+  assert.equal(json.includes('sleyt'), false);
+  assert.equal(json.includes('arguments_raw'), false);
 });
 
 test('pending delivery survives restart and acknowledged incident is not resent', async () => {

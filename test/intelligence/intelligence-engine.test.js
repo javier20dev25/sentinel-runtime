@@ -147,16 +147,20 @@ describe('SequenceDetector - Strict Attribution & Chronological Ordering', () =>
     assert.equal(detections2, null);
   });
 
-  // Test 7: Process exit must expire and purge state
-  it('7. Process exit (PROCESS_EXIT) expires and clears process FSM state immediately', () => {
+  // Test 7: Exit closes live processing but keeps bounded file evidence for parent correlation
+  it('7. Process exit retains only bounded sensitive-file evidence and rejects later child events', () => {
     const detector = new SequenceDetector({ windowMs: 10000 });
     const identity = { host_id: 'host-1', boot_id: 'boot-1', exec_id: 'exec-exit-1', pid: 888 };
 
     detector.evaluate({ eventType: 'FILE_READ', data: { path: '/etc/shadow' } }, identity, 500000);
     assert.equal(detector.processFsm.size, 1);
 
-    // Process exits
+    // Process exit retains evidence for a direct parent event inside the short correlation window.
     detector.evaluate({ eventType: 'PROCESS_EXIT' }, identity, 500500);
+    assert.equal(detector.processFsm.size, 1);
+    assert.equal(detector.processFsm.values().next().value.exitedAt, 500500);
+    assert.equal(detector.evaluate({ eventType: 'NETWORK_CONNECT', data: { destination_host: '198.51.100.1' } }, identity, 501000), null);
+    detector.prune(511000);
     assert.equal(detector.processFsm.size, 0);
   });
 
@@ -208,6 +212,127 @@ describe('SequenceDetector - Strict Attribution & Chronological Ordering', () =>
     assert.equal(detections[0].chainType, 'SUSPICIOUS_NETWORK_AND_SHELL_SEQUENCE');
     assert.equal(detections[0].severity, 'HIGH');
     assert.ok(detections[0].title.includes('socket inheritance unconfirmed'));
+  });
+
+  it('11. Proc root aliases do not bypass sensitive path matching', () => {
+    for (const alias of ['/proc/self/root/etc/shadow', '/proc/4242/root/etc/shadow']) {
+      const detector = new SequenceDetector();
+      const identity = { host_id: 'host-1', boot_id: 'boot-1', exec_id: `exec-alias-${alias.length}`, pid: 892 };
+
+      detector.evaluate({ eventType: 'FILE_OPEN_ATTEMPT', data: { path: alias }, sourceEventKey: `key-file-${alias}` }, identity, 1000);
+      const detections = detector.evaluate(
+        { eventType: 'NETWORK_CONNECT', data: { destination_host: '198.51.100.5', destination_port: 443 }, sourceEventKey: `key-net-${alias}` },
+        identity,
+        2000
+      );
+
+      assert.ok(detections);
+      assert.equal(detections[0].chainType, 'SUSPICIOUS_EXFILTRATION_SEQUENCE');
+      assert.equal(detections[0].details.fileAccessed, alias);
+      assert.equal(detections[0].details.fileAccessType, 'FILE_OPEN_ATTEMPT');
+      assert.match(detections[0].title, /file-open attempt/i);
+    }
+  });
+
+  it('12. Carries outbound activity across an execve in the same PID and start time', () => {
+    const detector = new SequenceDetector();
+    const python = {
+      host_id: 'host-1', boot_id: 'boot-1', exec_id: 'exec-python', pid: 3691,
+      process_start_time: '1794209205908984122'
+    };
+    const shell = { ...python, exec_id: 'exec-shell' };
+
+    detector.evaluate({ eventType: 'PROCESS_EXEC', data: { binary: '/usr/bin/python3' } }, python, 1000);
+    detector.evaluate({ eventType: 'NETWORK_CONNECT_ATTEMPT', data: { destination_ip: '127.0.0.1', destination_port: 18080 } }, python, 1100);
+    const detections = detector.evaluate({ eventType: 'PROCESS_EXEC', data: { binary: '/bin/sh' } }, shell, 1200);
+
+    assert.ok(detections);
+    assert.equal(detections[0].chainType, 'SUSPICIOUS_NETWORK_AND_SHELL_SEQUENCE');
+    assert.equal(detections[0].details.interpreter, '/bin/sh');
+  });
+
+  it('13. Replays the observed proc-root open and loopback connect as a gated incident', async () => {
+    const behavior = new BehaviorEngine();
+    const decisionEngine = new DecisionEngine();
+    decisionEngine.setObservabilityState('DEGRADED', true, 'NO_SENSOR_REPLAY');
+    const processIdentity = {
+      exec_id: 'exec-procpath', pid: 3690, process_start_time: '1794209205908984122',
+      executable_path: '/usr/bin/python3'
+    };
+    const host_identity = { host_id: 'host-lab', boot_id: 'boot-lab' };
+    const openEvent = {
+      event_type: 'FILE_OPEN_ATTEMPT', host_identity, process_identity: processIdentity,
+      timestamps: { source_timestamp: '1794209206366192192' },
+      source_event_key: 'a'.repeat(64), payload: { path: '/proc/self/root/etc/shadow' }
+    };
+    const networkEvent = {
+      event_type: 'NETWORK_CONNECT_ATTEMPT', host_identity, process_identity: processIdentity,
+      timestamps: { source_timestamp: '1794209206448894816' },
+      source_event_key: 'b'.repeat(64), payload: { destination_ip: '127.0.0.1', destination_port: 18080 }
+    };
+
+    assert.equal(behavior.analyzeEvent(openEvent).sequenceDetections, null);
+    const analysis = behavior.analyzeEvent(networkEvent);
+    assert.equal(analysis.sequenceDetections[0].chainType, 'SUSPICIOUS_EXFILTRATION_SEQUENCE');
+    assert.deepEqual(analysis.sequenceDetections[0].sourceEventKeys, ['a'.repeat(64), 'b'.repeat(64)]);
+    const decision = await decisionEngine.decide(analysis, networkEvent);
+    assert.equal(decision.threatLevel, 'HIGH');
+    assert.equal(decision.requestedAction, ContainmentLevel.R1_OBSERVE_ONLY);
+    assert.match(decision.safetyGatingReasons.join(' '), /observability degraded/i);
+  });
+
+  it('14. Separates PID reuse from execve using process start time', () => {
+    const detector = new SequenceDetector();
+    const first = { host_id: 'host-1', boot_id: 'boot-1', exec_id: 'exec-old', pid: 777, process_start_time: '1000' };
+    const reusedPid = { ...first, exec_id: 'exec-new', process_start_time: '2000' };
+
+    detector.evaluate({ eventType: 'FILE_READ', data: { path: '/etc/shadow' } }, first, 1000);
+    const detections = detector.evaluate({ eventType: 'NETWORK_CONNECT_ATTEMPT', data: { destination_ip: '198.51.100.2' } }, reusedPid, 1100);
+
+    assert.equal(detections, null);
+    assert.equal(detector.processFsm.size, 2);
+  });
+
+  it('15. Correlates sensitive file-open in an exited child to a later direct-parent network attempt', () => {
+    const detector = new SequenceDetector({ windowMs: 10000 });
+    const parentExec = 'exec-python-parent';
+    const child = {
+      host_id: 'host-lab', boot_id: 'boot-lab', exec_id: 'exec-cat-child', parent_exec_id: parentExec,
+      pid: 3689, process_start_time: '1794209205833196248', executable_path: '/bin/cat'
+    };
+    const parent = {
+      host_id: 'host-lab', boot_id: 'boot-lab', exec_id: parentExec,
+      pid: 3687, process_start_time: '1794209205176586375', executable_path: '/usr/bin/python3'
+    };
+
+    detector.evaluate({ eventType: 'FILE_OPEN_ATTEMPT', data: { path: '/etc/shadow' }, sourceEventKey: 'child-file-key' }, child, 1000);
+    detector.evaluate({ eventType: 'PROCESS_EXIT' }, child, 1100);
+    const detections = detector.evaluate({
+      eventType: 'NETWORK_CONNECT_ATTEMPT',
+      data: { destination_ip: '127.0.0.1', destination_port: 18080 },
+      sourceEventKey: 'parent-network-key'
+    }, parent, 2100);
+
+    assert.equal(detections.length, 1);
+    assert.equal(detections[0].chainType, ChainType.SUSPICIOUS_EXFILTRATION);
+    assert.equal(detections[0].confidence, 0.55);
+    assert.match(detections[0].title, /direct parent-child/i);
+    assert.match(detections[0].title, /transfer unconfirmed/i);
+    assert.deepEqual(detections[0].sourceEventKeys, ['child-file-key', 'parent-network-key']);
+    assert.equal(detections[0].details.fileProcess.pid, 3689);
+    assert.equal(detections[0].details.networkProcess.pid, 3687);
+    assert.equal(detections[0].attribution.relationship, 'DIRECT_PARENT_CHILD');
+  });
+
+  it('16. Does not correlate child activity to an unrelated process without an exact parent exec id', () => {
+    const detector = new SequenceDetector({ windowMs: 10000 });
+    const child = { host_id: 'host-lab', boot_id: 'boot-lab', exec_id: 'exec-cat-child', parent_exec_id: 'exec-real-parent', pid: 3689 };
+    const unrelated = { host_id: 'host-lab', boot_id: 'boot-lab', exec_id: 'exec-other-parent', pid: 3687 };
+
+    detector.evaluate({ eventType: 'FILE_OPEN_ATTEMPT', data: { path: '/etc/shadow' }, sourceEventKey: 'child-file-key' }, child, 1000);
+    detector.evaluate({ eventType: 'PROCESS_EXIT' }, child, 1100);
+    const detections = detector.evaluate({ eventType: 'NETWORK_CONNECT_ATTEMPT', data: { destination_ip: '198.51.100.9' }, sourceEventKey: 'other-net-key' }, unrelated, 2100);
+    assert.equal(detections, null);
   });
 });
 

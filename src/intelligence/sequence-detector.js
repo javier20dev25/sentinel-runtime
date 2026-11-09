@@ -5,6 +5,7 @@ const DEFAULT_MAX_PROCESSES = 5000;
 const DEFAULT_PRUNE_INTERVAL_MS = 5000;
 const MAX_STAGES_PER_PROCESS = 32;
 const MAX_TRIGGERED_INCIDENTS_PER_PROCESS = 128;
+const MAX_EXEC_IDS_PER_PROCESS = 16;
 
 const ChainType = Object.freeze({
   SUSPICIOUS_EXFILTRATION: 'SUSPICIOUS_EXFILTRATION_SEQUENCE',
@@ -24,15 +25,18 @@ class SequenceDetector {
     this.maxProcesses = options.maxProcesses || DEFAULT_MAX_PROCESSES;
     this.pruneIntervalMs = options.pruneIntervalMs || DEFAULT_PRUNE_INTERVAL_MS;
     this.lastPruneTime = 0;
-    // Map: processKey -> { identity, stages: Map(stageName -> stageData), triggeredIncidents: Set, firstSeen, lastSeen }
+    // Map: processKey -> { identity, execIds, parentExecId, stages, triggeredIncidents, firstSeen, lastSeen, exitedAt }
     this.processFsm = new Map();
+    // These bounded indices allow exact direct-parent attribution without joining on PID alone.
+    this.processesByExec = new Map();
+    this.childrenByParentExec = new Map();
   }
 
   /**
-   * Derives a strong, collision-free key for process attribution.
-   * Strict invariant: Causal correlation across events requires host_id + boot_id + exec_id.
-   * Partial identities (e.g. PID-only or missing exec_id) return null to prevent
-   * false causal attribution or cross-process state contamination.
+   * Derives a process-instance key that survives execve transitions without
+   * allowing PID reuse to merge unrelated processes. Every event still needs
+   * host_id + boot_id + exec_id; PID + process_start_time keeps one process
+   * together when its exec_id changes after execve.
    */
   processKey(identity) {
     if (!identity || typeof identity !== 'object') return null;
@@ -44,7 +48,62 @@ class SequenceDetector {
     if (!boot || typeof boot !== 'string' || boot.trim() === '') return null;
     if (!exec || typeof exec !== 'string' || exec.trim() === '') return null;
 
-    return `${host}:${boot}:${exec}`;
+    const pid = identity.pid;
+    const start = identity.process_start_time ?? identity.processStartTime ?? identity.start_time ?? identity.startTime;
+    const startText = typeof start === 'string' && /^\d{1,20}$/.test(start)
+      ? start
+      : Number.isSafeInteger(start) && start >= 0 ? String(start) : null;
+    if (Number.isSafeInteger(pid) && pid >= 0 && pid <= 0xffffffff && startText !== null) {
+      return `${host}:${boot}:pid:${pid}:${startText}`;
+    }
+    return `${host}:${boot}:exec:${exec}`;
+  }
+
+  lineageKey(host, boot, exec) {
+    if (![host, boot, exec].every(value => typeof value === 'string' && value.trim() !== '')) return null;
+    return `${host}:${boot}:exec:${exec}`;
+  }
+
+  addIndex(index, lineage, processKey) {
+    if (!lineage) return;
+    let keys = index.get(lineage);
+    if (!keys) {
+      keys = new Set();
+      index.set(lineage, keys);
+    }
+    keys.add(processKey);
+  }
+
+  indexIdentity(state, key, identity) {
+    const host = identity.host_id || identity.hostId;
+    const boot = identity.boot_id || identity.bootId;
+    const exec = identity.exec_id || identity.execId;
+    const parentExec = identity.parent_exec_id || identity.parentExecId;
+    if (typeof exec === 'string' && exec) {
+      if (!state.execIds.includes(exec)) {
+        state.execIds.push(exec);
+        if (state.execIds.length > MAX_EXEC_IDS_PER_PROCESS) state.execIds.shift();
+      }
+      this.addIndex(this.processesByExec, this.lineageKey(host, boot, exec), key);
+    }
+    if (!state.parentExecId && typeof parentExec === 'string' && parentExec) {
+      state.parentExecId = parentExec;
+      state.parentLineageKey = this.lineageKey(host, boot, parentExec);
+    }
+    if (state.parentLineageKey) this.addIndex(this.childrenByParentExec, state.parentLineageKey, key);
+  }
+
+  rebuildIndexes() {
+    this.processesByExec.clear();
+    this.childrenByParentExec.clear();
+    for (const [key, state] of this.processFsm) {
+      const host = state.identity.host_id || state.identity.hostId;
+      const boot = state.identity.boot_id || state.identity.bootId;
+      for (const exec of state.execIds) {
+        this.addIndex(this.processesByExec, this.lineageKey(host, boot, exec), key);
+      }
+      if (state.parentLineageKey) this.addIndex(this.childrenByParentExec, state.parentLineageKey, key);
+    }
   }
 
   /**
@@ -75,6 +134,7 @@ class SequenceDetector {
         if (oldestKey) this.processFsm.delete(oldestKey);
       }
     }
+    this.rebuildIndexes();
   }
 
   setStage(state, stageName, stageData) {
@@ -106,12 +166,6 @@ class SequenceDetector {
 
     const eventType = event.eventType || event.event_type;
 
-    // Process Exit lifecycle: close and purge process FSM state immediately
-    if (eventType === 'PROCESS_EXIT') {
-      this.processFsm.delete(key);
-      return null;
-    }
-
     // Rate-limited or capacity-triggered pruning
     if (now - this.lastPruneTime >= this.pruneIntervalMs || this.processFsm.size >= this.maxProcesses) {
       this.prune(now);
@@ -121,13 +175,30 @@ class SequenceDetector {
     if (!state) {
       state = {
         identity,
+        execIds: [],
+        parentExecId: null,
+        parentLineageKey: null,
         stages: new Map(),
         triggeredIncidents: new Set(),
         firstSeen: now,
-        lastSeen: now
+        lastSeen: now,
+        exitedAt: null
       };
       this.processFsm.set(key, state);
     }
+
+    this.indexIdentity(state, key, identity);
+
+    // Exit closes the process but retains only sensitive-file evidence briefly so a
+    // directly related parent can be correlated with its later network attempt.
+    if (eventType === 'PROCESS_EXIT') {
+      state.lastSeen = Math.max(state.lastSeen, now);
+      state.exitedAt = now;
+      if (!state.stages.has('SENSITIVE_FILE_ACCESSED')) this.processFsm.delete(key);
+      this.rebuildIndexes();
+      return null;
+    }
+    if (state.exitedAt !== null) return null;
 
     // Handle potential timestamp regressions safely
     if (now >= state.lastSeen) {
@@ -151,7 +222,7 @@ class SequenceDetector {
     if (eventType === 'FILE_READ' || eventType === 'FILE_OPEN_ATTEMPT') {
       const targetPath = data.path || data.file_path || data.filename || '';
       if (isSensitivePath(targetPath)) {
-        this.setStage(state, 'SENSITIVE_FILE_ACCESSED', { timestamp: now, path: targetPath, sourceEventKey });
+        this.setStage(state, 'SENSITIVE_FILE_ACCESSED', { timestamp: now, path: targetPath, eventType, sourceEventKey });
       }
     }
 
@@ -164,7 +235,7 @@ class SequenceDetector {
     ) {
       const host = data.host || data.destination_ip || data.destination_host || '';
       const port = data.port ?? data.destination_port;
-      this.setStage(state, 'NETWORK_OUTBOUND_ATTEMPT', { timestamp: now, host, port, sourceEventKey });
+      this.setStage(state, 'NETWORK_OUTBOUND_ATTEMPT', { timestamp: now, host, port, eventType, sourceEventKey });
     }
 
     // Stage 4: Capability Check (cap_capable)
@@ -192,10 +263,12 @@ class SequenceDetector {
             chainType: ChainType.SUSPICIOUS_EXFILTRATION,
             severity: 'HIGH',
             confidence: 0.70, // Conservative: transfer of bytes not verified
-            title: 'Suspicious Sequence: Sensitive file read followed by network outbound attempt (transfer unconfirmed)',
+            title: `Suspicious Sequence: ${fileStage.eventType === 'FILE_READ' ? 'sensitive file read activity' : 'sensitive file-open attempt'} followed by network outbound attempt (transfer unconfirmed)`,
             details: {
               fileAccessed: fileStage.path,
-              networkTarget: `${netStage.host}:${netStage.port || '?'}`
+              fileAccessType: fileStage.eventType,
+              networkTarget: `${netStage.host}:${netStage.port || '?'}`,
+              networkEventType: netStage.eventType || null
             },
             sourceEventKeys: [fileStage.sourceEventKey, netStage.sourceEventKey].filter(Boolean),
             stageTimestamps: {
@@ -209,7 +282,7 @@ class SequenceDetector {
     }
 
     // B. Suspicious Network and Shell Sequence:
-    // Requires: NETWORK_OUTBOUND_ATTEMPT strictly happened BEFORE or CONCURRENTLY with INTERPRETER_SPAWNED
+    // Requires: NETWORK_OUTBOUND_ATTEMPT before a later interpreter exec.
     if (state.stages.has('NETWORK_OUTBOUND_ATTEMPT') && state.stages.has('INTERPRETER_SPAWNED')) {
       const netStage = state.stages.get('NETWORK_OUTBOUND_ATTEMPT');
       const interpStage = state.stages.get('INTERPRETER_SPAWNED');
@@ -268,7 +341,80 @@ class SequenceDetector {
       }
     }
 
+    const crossProcessDetection = this.detectDirectParentSequence(key, identity, now);
+    if (crossProcessDetection) detections.push(crossProcessDetection);
+
     return detections.length > 0 ? detections : null;
+  }
+
+  detectDirectParentSequence(currentKey, identity, now) {
+    const host = identity.host_id || identity.hostId;
+    const boot = identity.boot_id || identity.bootId;
+    const currentExec = identity.exec_id || identity.execId;
+    const parentExec = identity.parent_exec_id || identity.parentExecId;
+    const relatedKeys = new Set();
+    const parentLineage = this.lineageKey(host, boot, parentExec);
+    const currentLineage = this.lineageKey(host, boot, currentExec);
+
+    // If this is the parent process, inspect only children whose sensor supplied
+    // this exact parent_exec_id on the same host boot.
+    for (const childKey of this.childrenByParentExec.get(currentLineage) || []) relatedKeys.add(childKey);
+    // If this is a child, inspect only its exact parent_exec_id on the same host boot.
+    for (const parentKey of this.processesByExec.get(parentLineage) || []) relatedKeys.add(parentKey);
+    relatedKeys.delete(currentKey);
+
+    const current = this.processFsm.get(currentKey);
+    if (!current) return null;
+    const currentFile = current.stages.get('SENSITIVE_FILE_ACCESSED');
+    const currentNetwork = current.stages.get('NETWORK_OUTBOUND_ATTEMPT');
+
+    for (const relatedKey of relatedKeys) {
+      const related = this.processFsm.get(relatedKey);
+      if (!related) continue;
+      const relatedFile = related.stages.get('SENSITIVE_FILE_ACCESSED');
+      const relatedNetwork = related.stages.get('NETWORK_OUTBOUND_ATTEMPT');
+      const pairs = [
+        { fileStage: currentFile, fileState: current, netStage: relatedNetwork, netState: related },
+        { fileStage: relatedFile, fileState: related, netStage: currentNetwork, netState: current }
+      ];
+      const pair = pairs.find(candidate => candidate.fileStage && candidate.netStage &&
+        candidate.fileState !== candidate.netState && candidate.fileStage.timestamp < candidate.netStage.timestamp &&
+        candidate.netStage.timestamp - candidate.fileStage.timestamp <= this.windowMs &&
+        now - Math.max(candidate.fileStage.timestamp, candidate.netStage.timestamp) <= this.windowMs);
+      if (!pair) continue;
+      const { fileStage, fileState, netStage, netState } = pair;
+      const fileIdentity = fileState.identity;
+      const netIdentity = netState.identity;
+      const incidentKey = `${ChainType.SUSPICIOUS_EXFILTRATION}:DIRECT_PARENT:${fileStage.sourceEventKey || fileStage.timestamp}:${netStage.sourceEventKey || netStage.timestamp}`;
+      if (fileState.triggeredIncidents.has(incidentKey) || netState.triggeredIncidents.has(incidentKey)) continue;
+      this.recordIncident(fileState, incidentKey);
+      this.recordIncident(netState, incidentKey);
+
+      return {
+        chainType: ChainType.SUSPICIOUS_EXFILTRATION,
+        severity: 'HIGH',
+        confidence: 0.55,
+        title: 'Suspicious direct parent-child sequence: child sensitive file-open attempt followed by parent network attempt (content read and transfer unconfirmed)',
+        details: {
+          fileAccessed: fileStage.path,
+          fileAccessType: fileStage.eventType,
+          fileProcess: { pid: fileIdentity.pid ?? null, execId: fileIdentity.exec_id || fileIdentity.execId || null },
+          networkTarget: `${netStage.host}:${netStage.port || '?'}`,
+          networkEventType: netStage.eventType || null,
+          networkProcess: { pid: netIdentity.pid ?? null, execId: netIdentity.exec_id || netIdentity.execId || null },
+          attribution: 'DIRECT_PARENT_EXEC_ID_AND_HOST_BOOT'
+        },
+        sourceEventKeys: [fileStage.sourceEventKey, netStage.sourceEventKey].filter(Boolean),
+        stageTimestamps: { fileAccess: fileStage.timestamp, networkAttempt: netStage.timestamp },
+        attribution: {
+          relationship: 'DIRECT_PARENT_CHILD',
+          fileProcessParentExecId: fileState.parentExecId || null,
+          networkProcessExecId: netIdentity.exec_id || netIdentity.execId || null
+        },
+        incidentKey
+      };
+    }
+    return null;
   }
 }
 
@@ -289,15 +435,16 @@ function isShellOrInterpreter(p) {
 }
 
 function isSensitivePath(p) {
-  if (!p) return false;
+  if (typeof p !== 'string' || p === '') return false;
+  const normalized = p.replace(/^\/proc\/(?:self|thread-self|\d+)\/root(?=\/|$)/, '');
   return (
-    p.startsWith('/etc/shadow') ||
-    p.startsWith('/etc/sudoers') ||
-    p.includes('/.ssh/') ||
-    p.includes('/.aws/') ||
-    p.endsWith('/.env') ||
-    p.includes('credentials') ||
-    p.startsWith('/proc/kcore')
+    normalized.startsWith('/etc/shadow') ||
+    normalized.startsWith('/etc/sudoers') ||
+    normalized.includes('/.ssh/') ||
+    normalized.includes('/.aws/') ||
+    normalized.endsWith('/.env') ||
+    normalized.includes('credentials') ||
+    normalized.startsWith('/proc/kcore')
   );
 }
 
