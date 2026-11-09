@@ -8,6 +8,10 @@ const CLI_TOKEN_PREFIX = 'sntl_';
 const DEFAULT_CLOUD_ENDPOINT = 'https://sentinel-psi-nine.vercel.app';
 const DEFAULT_TIMEOUT_MS = 5000;
 const MAX_RESPONSE_BYTES = 16 * 1024;
+const RUNTIME_ANALYSIS_STATUSES = new Set([
+  'NOT_REQUESTED', 'PENDING', 'COMPLETED', 'QUOTA_REQUIRED', 'NOT_INCLUDED',
+  'ANALYSIS_UNAVAILABLE', 'ANALYSIS_FAILED'
+]);
 
 class SentinelRuntimeCloudClient {
   /**
@@ -155,8 +159,9 @@ class SentinelRuntimeCloudClient {
         return { ok: false, offline: false, error: 'INVALID_CLOUD_RESPONSE', status: response.status };
       }
       if (expectations.expectedClientIncidentId &&
-          (parsed.analysis_status !== 'NOT_REQUESTED' || typeof parsed.duplicate !== 'boolean' ||
-            parsed.idempotency_key !== expectations.expectedIdempotencyKey)) {
+          (!RUNTIME_ANALYSIS_STATUSES.has(parsed.analysis_status) || typeof parsed.duplicate !== 'boolean' ||
+            parsed.idempotency_key !== expectations.expectedIdempotencyKey ||
+            (parsed.analysis_pulses !== undefined && (!Number.isSafeInteger(parsed.analysis_pulses) || parsed.analysis_pulses < 0 || parsed.analysis_pulses > 1)))) {
         return { ok: false, offline: false, error: 'INVALID_CLOUD_RESPONSE', status: response.status };
       }
       if (expectations.expectedHeartbeat &&

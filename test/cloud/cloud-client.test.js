@@ -110,7 +110,8 @@ test('SentinelRuntimeCloudClient accepts only a matching idempotent receipt', as
     client_incident_id: 'inc_expected',
     idempotency_key: idempotencyKey,
     recorded_at: new Date().toISOString(),
-    analysis_status: 'NOT_REQUESTED'
+    analysis_status: 'COMPLETED',
+    analysis_pulses: 1
   }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   try {
     const client = new SentinelRuntimeCloudClient({
@@ -119,6 +120,8 @@ test('SentinelRuntimeCloudClient accepts only a matching idempotent receipt', as
     });
     const result = await client.sendIncidentEnvelope({ incident_id: 'inc_expected', idempotency_key: idempotencyKey });
     assert.equal(result.ok, true);
+    assert.equal(result.data.analysis_status, 'COMPLETED');
+    assert.equal(result.data.analysis_pulses, 1);
   } finally {
     global.fetch = originalFetch;
   }

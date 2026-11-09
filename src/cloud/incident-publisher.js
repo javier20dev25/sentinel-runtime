@@ -314,7 +314,9 @@ class RuntimeIncidentPublisher {
           incident_id: incidentId,
           cloud_incident_id: result.data?.incident_id || null,
           duplicate: result.data?.duplicate === true,
-          recorded_at: result.data?.recorded_at || null
+          recorded_at: result.data?.recorded_at || null,
+          analysis_status: result.data?.analysis_status || 'NOT_REPORTED',
+          analysis_pulses: Number.isSafeInteger(result.data?.analysis_pulses) ? result.data.analysis_pulses : null
         });
         this.states.set(incidentId, { status: 'ACKNOWLEDGED' });
         sent++;

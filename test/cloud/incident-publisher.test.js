@@ -111,6 +111,26 @@ test('pending delivery survives restart and acknowledged incident is not resent'
   ledger.close();
 });
 
+test('publisher persists Cloud analysis status and pulse count in the custody ledger', async () => {
+  const entry = sampleEntry();
+  const ledger = createLedgerWithEvent(entry);
+  const publisher = new RuntimeIncidentPublisher({
+    ledger, hostId: 'host-1', bootId: 'boot-1',
+    client: { sendIncidentEnvelope: async () => ({ ok: true, data: {
+      incident_id: 'cloud-1', duplicate: false, analysis_status: 'COMPLETED', analysis_pulses: 1
+    } }) }
+  });
+  publisher.consider(entry, 'HEALTHY');
+  assert.deepEqual(await publisher.flushPending(), { sent: 1, failed: 0, queued: 0 });
+  const ack = ledger.getRecords({ limit: 20 })
+    .find(row => row.record_type === 'cloud_delivery_ack');
+  assert.ok(ack);
+  assert.equal(JSON.parse(ack.payload_json).analysis_status, 'COMPLETED');
+  assert.equal(JSON.parse(ack.payload_json).analysis_pulses, 1);
+  publisher.close();
+  ledger.close();
+});
+
 test('low severity and events without a stable source key do not enqueue Cloud cases', () => {
   const entry = sampleEntry();
   const ledger = createLedgerWithEvent(entry);
