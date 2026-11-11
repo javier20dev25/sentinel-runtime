@@ -155,13 +155,13 @@ const SCENARIOS = [
       },
       {
         eventType: 'FILE_READ',
-        data: { path: '/proc/1/root/etc/shadow', file_path: '/proc/1/root/etc/shadow', pid: 14200 },
+        data: { path: '/proc/1/root/etc/shadow', file_path: '/proc/1/root/etc/shadow', pid: 14200, ppid: 14100 },
         sourceEventKey: 'evt_5_read_shadow',
         deltaMs: 22
       },
       {
         eventType: 'NETWORK_CONNECT',
-        data: { destination_ip: '192.0.2.77', host: '192.0.2.77', port: 4444 },
+        data: { destination_ip: '192.0.2.77', host: '192.0.2.77', port: 4444, pid: 14200, ppid: 14100 },
         sourceEventKey: 'evt_5_net_exfil',
         deltaMs: 65
       }
@@ -170,6 +170,37 @@ const SCENARIOS = [
       vector: 'Read access to host /etc/shadow via /proc/1/root followed by outbound connect to 192.0.2.77:4444',
       target: '192.0.2.77:4444',
       destClassification: 'Documentation RFC 5737 TEST-NET-1 (Simulated C2)'
+    }
+  },
+  {
+    id: 'SCENARIO_6_IDENTITY_CONFLICT_TEST',
+    name: 'Controlled Process Identity Conflict & Lineage Rupture Test',
+    actor: 'multi_pid:14200_vs_10420',
+    identity: { host_id: 'host_1794126625946', boot_id: 'boot_wsl2_01', exec_id: 'exec_conflict_600' },
+    steps: [
+      {
+        eventType: 'PROCESS_EXEC',
+        data: { binary: '/usr/local/bin/container_agent', pid: 14200, ppid: 14100 },
+        sourceEventKey: 'evt_6_exec_agent',
+        deltaMs: 0
+      },
+      {
+        eventType: 'FILE_READ',
+        data: { path: '/proc/1/root/etc/shadow', file_path: '/proc/1/root/etc/shadow', pid: 14200, ppid: 14100 },
+        sourceEventKey: 'evt_6_read_shadow',
+        deltaMs: 15
+      },
+      {
+        eventType: 'NETWORK_CONNECT',
+        data: { destination_ip: '192.0.2.77', host: '192.0.2.77', port: 4444, pid: 10420, ppid: 10400 },
+        sourceEventKey: 'evt_6_net_divergent_pid',
+        deltaMs: 40
+      }
+    ],
+    metadata: {
+      vector: 'Simulated PID divergence (PID 14200 vs PID 10420) sharing exec_id exec_conflict_600',
+      target: '192.0.2.77:4444',
+      destClassification: 'Adversarial Telemetry Conflict Benchmark (RFC 5737)'
     }
   }
 ];
@@ -302,8 +333,8 @@ async function main() {
               kernel_ns: `${(baseTime + step.deltaMs) * 1000000}`
             },
             process_identity: {
-              pid: step.data.pid || 10420,
-              ppid: step.data.ppid || 10400,
+              pid: step.data.pid || (scenario.steps[0] && scenario.steps[0].data && scenario.steps[0].data.pid) || 10420,
+              ppid: step.data.ppid || (scenario.steps[0] && scenario.steps[0].data && scenario.steps[0].data.ppid) || 10400,
               binary: step.data.binary || undefined,
               binary_path: step.data.binary || undefined,
               exec_id: scenario.identity.exec_id,
@@ -369,7 +400,7 @@ async function main() {
         why_flagged: primaryDetection.title,
         epistemic_audit: {
           what_we_know: [
-            `Observed sequence of ${scenario.steps.length} distinct events executed under actor ${scenario.actor}.`,
+            `Observed sequence of ${scenario.steps.length} distinct events.${scenario.steps.some((s, i, a) => s.data.pid && a[0].data && a[0].data.pid && s.data.pid !== a[0].data.pid) ? ' Steps report divergent PIDs (controlled identity conflict test).' : ` Executed under actor ${scenario.actor}.`}`,
             `Outbound target ${scenario.metadata.target} matched criteria for ${scenario.metadata.destClassification}.`,
             `Zero local containment applied under observe-only laboratory policy.`
           ],
