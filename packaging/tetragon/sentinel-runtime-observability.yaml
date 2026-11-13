@@ -1,0 +1,76 @@
+# LAB-ONLY PROFILE — do not install fleet-wide without workload-specific filters
+# and event-volume/loss evaluation. vfs_read and tcp_sendmsg are high-frequency
+# hooks and can create substantial event volume. All probes are observational;
+# this policy does not authorize containment or other host changes. Return types
+# use explicit Tetragon v1.8-compatible scalar types.
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: sentinel-runtime-observability
+spec:
+  kprobes:
+    - call: do_sys_openat2
+      syscall: false
+      args:
+        - index: 0
+          type: int
+          label: sentinel_dfd
+        - index: 1
+          type: string
+          label: sentinel_filename
+      return: true
+      returnArg:
+        index: 0
+        type: int
+    - call: vfs_read
+      syscall: false
+      args:
+        - index: 0
+          type: file
+          label: sentinel_file
+        - index: 2
+          type: size_t
+          label: sentinel_count
+      return: true
+      returnArg:
+        index: 0
+        type: long
+    - call: tcp_v4_connect
+      syscall: false
+      args:
+        - index: 0
+          type: sock
+          label: sentinel_socket
+        - index: 1
+          type: sockaddr
+          label: sentinel_sockaddr
+      return: true
+      returnArg:
+        index: 0
+        type: int
+    - call: tcp_v6_connect
+      syscall: false
+      args:
+        - index: 0
+          type: sock
+          label: sentinel_socket
+        - index: 1
+          type: sockaddr
+          label: sentinel_sockaddr
+      return: true
+      returnArg:
+        index: 0
+        type: int
+    - call: tcp_sendmsg
+      syscall: false
+      args:
+        - index: 0
+          type: sock
+          label: sentinel_socket
+        - index: 2
+          type: size_t
+          label: sentinel_size
+      return: true
+      returnArg:
+        index: 0
+        type: int

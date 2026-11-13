@@ -2,7 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const { SentinelRuntimeCloudClient } = require('../../src/cloud/cloud-client');
+const { canonicalJson } = require('../../src/contracts/canonical-json');
 
 test('SentinelRuntimeCloudClient rejects CLI tokens (sntl_ prefix)', () => {
   const cliToken = 'sntl_abcdefghijklmnopqrstuvwxyz0123456789ABCDEF';
@@ -125,4 +127,44 @@ test('SentinelRuntimeCloudClient accepts only a matching idempotent receipt', as
   } finally {
     global.fetch = originalFetch;
   }
+});
+
+test('SentinelRuntimeCloudClient validates the durable task claim contract', async () => {
+  const originalFetch = global.fetch;
+  let request;
+  global.fetch = async (url, options) => {
+    request = { url: String(url), options };
+    return new Response(JSON.stringify({ ok: true, state: 'TASKS_DISPATCHED', tasks: [{
+      task_id: 'inv_task_0123456789abcdef01234567', incident_id: 'case-1', expected_boot_id: 'c31528b0-ab61-4f13-9b8d-bf7ee47b0b87',
+      playbook_id: 'LINUX.PROCESS.IDENTITY', playbook_version: '1.0.0', governance_level: 'L0_PASSIVE_READ',
+      scope: { pid: 42, boot_id: 'c31528b0-ab61-4f13-9b8d-bf7ee47b0b87' }, nonce: 'a'.repeat(32),
+      created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 60_000).toISOString(), timeout_ms: 5000, max_output_bytes: 8192,
+    }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  try {
+    const client = new SentinelRuntimeCloudClient({ apiKey: 'snt_rt_abcdefghijklmnopqrstuvwxyz0123456789ABCDEF', endpoint: 'http://127.0.0.1:54321' });
+    const result = await client.pollInvestigationTasks({ agentVersion: '0.2.0', capabilities: { investigation_tasks: true, playbooks: ['LINUX.PROCESS.IDENTITY'] } });
+    assert.equal(result.ok, true);
+    assert.equal(result.data.tasks.length, 1);
+    assert.match(request.url, /\/api\/runtime\/tasks\/poll$/);
+    assert.equal(JSON.parse(request.options.body).capabilities.investigation_tasks, true);
+  } finally { global.fetch = originalFetch; }
+});
+
+test('SentinelRuntimeCloudClient posts task results to the exact task path and rejects mismatched receipts', async () => {
+  const originalFetch = global.fetch;
+  const output = { observation_status: 'OBSERVED', pid: 42 };
+  const resultHash = crypto.createHash('sha256').update(canonicalJson(output)).digest('hex');
+  let requestUrl = '';
+  global.fetch = async (url) => {
+    requestUrl = String(url);
+    return new Response(JSON.stringify({ ok: true, task_id: 'inv_task_0123456789abcdef01234567', status: 'COMPLETED', duplicate: false, result_hash: resultHash }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  try {
+    const client = new SentinelRuntimeCloudClient({ apiKey: 'snt_rt_abcdefghijklmnopqrstuvwxyz0123456789ABCDEF', endpoint: 'http://127.0.0.1:54321' });
+    const taskId = 'inv_task_0123456789abcdef01234567';
+    const result = await client.sendInvestigationTaskResult({ task_id: taskId, nonce: 'a'.repeat(32), status: 'COMPLETED', output_data: output, result_hash: resultHash });
+    assert.equal(result.ok, true);
+    assert.ok(requestUrl.endsWith(`/api/runtime/tasks/${taskId}/result`));
+  } finally { global.fetch = originalFetch; }
 });

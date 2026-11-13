@@ -1,0 +1,33 @@
+#!/bin/sh
+set -eu
+
+socket=${1:-/var/run/cilium/tetragon/tetragon.sock}
+group=${2:-sentinel-tetragon-access}
+wait_seconds=${3:-90}
+
+case "$wait_seconds" in
+  ''|*[!0-9]*)
+    echo 'wait_seconds must be an integer from 1 to 300' >&2
+    exit 2
+    ;;
+esac
+if [ "$wait_seconds" -lt 1 ] || [ "$wait_seconds" -gt 300 ]; then
+  echo 'wait_seconds must be an integer from 1 to 300' >&2
+  exit 2
+fi
+
+socket_file=$socket
+attempt=0
+max_attempts=$((wait_seconds * 10))
+while [ "$attempt" -lt "$max_attempts" ]; do
+  if [ -S "$socket_file" ]; then
+    chgrp "$group" "$socket_file"
+    chmod 0660 "$socket_file"
+    exit 0
+  fi
+  attempt=$((attempt + 1))
+  sleep 0.1
+done
+
+echo "Tetragon Unix socket did not become ready within ${wait_seconds} seconds: $socket_file" >&2
+exit 1

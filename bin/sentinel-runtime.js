@@ -19,6 +19,7 @@ const { ThreatLevel } = require('../src/types');
 const { ForensicExporter } = require('../src/custody');
 const { SentinelRuntimeCloudClient } = require('../src/cloud/cloud-client');
 const { RuntimeIncidentPublisher } = require('../src/cloud/incident-publisher');
+const { InvestigationTaskExecutor } = require('../src/runtime/investigation-task-executor');
 const { ProfileLearner } = require('../src/profiling');
 const { BehaviorEngine, DecisionEngine } = require('../src/intelligence');
 
@@ -112,13 +113,14 @@ Commands:
                                                Atomic file checkpoint/replay for an immutable input
   collect-tetragon [--address unix:///run/sentinel-runtime/tetragon-readonly.sock]
     --host-id <stable-id> (--boot-id <trusted-id> | --boot-id-file <path>) [--tls-ca <pem>]
-    [--cloud [--cloud-endpoint https://sentinel-cloud.example]]
+    [--cloud [--cloud-endpoint https://sentinel-cloud.example] [--investigation-tasks]]
     [--tls-client-cert <pem> --tls-client-key <pem>] [--expected-node-name <name>]
     [--max-events <n>] [--batch-size <n> --queue-capacity <n> --queue-mib <16..256>]
     [--profiles <json> --workload-id <id>] [--db <path>] [--capture-process-arguments]
     [--metrics-url http://127.0.0.1:2112/metrics --metrics-interval-ms <1000..300000>]
     [--metrics-tls-ca <pem> --metrics-tls-client-cert <pem> --metrics-tls-client-key <pem>]
-                                               Stream pinned Tetragon gRPC v1.8.0 in observe-only mode
+    [--task-poll-interval-ms <5000..300000>]
+                                               Stream Tetragon in observe-only mode; opt-in tasks are L0 read-only playbooks only
   tetragon-readonly-proxy [--upstream-address unix:///var/run/tetragon/tetragon.sock]
     [--listen-address unix:///run/sentinel-runtime/tetragon-readonly.sock] [--socket-mode 0600]
     [--tls-ca <pem> --tls-client-cert <pem> --tls-client-key <pem>]
@@ -156,6 +158,7 @@ function printStatus() {
     external_anchor: false,
     gRPC_sensor: 'v1.8.0 WSL2 live smoke passed; production distribution/kernel matrix pending',
     active_enforcement: 'not implemented',
+    investigation_tasks: 'opt-in Cloud polling; fixed L0 read-only Linux playbooks; no shell or destructive host actions',
     service_deployment: 'separate hardened systemd proxy and collector units available; installation and fleet management are operator-managed'
   }, null, 2));
 }
@@ -485,6 +488,7 @@ async function collectTetragonCommand(options) {
   if (options.metricsUrl) validateMetricsPeer(address, options.metricsUrl);
   else if (options.metricsTlsCa || options.metricsTlsClientCert || options.metricsTlsClientKey) throw new Error('Metrics TLS options require --metrics-url');
   const maxEvents = options.maxEvents === undefined ? null : numberOption('maxEvents', null, 1, Number.MAX_SAFE_INTEGER);
+  if (options.investigationTasks && !options.cloud) throw new Error('--investigation-tasks requires --cloud');
   const ledger = openLedger(options);
   const integrity = ledger.verifyIntegrity();
   if (!integrity.valid) {
@@ -500,6 +504,7 @@ async function collectTetragonCommand(options) {
   try {
     let verifiedSensorVersion = null;
     let incidentPublisher = null;
+    let taskExecutor = null;
     if (options.cloud) {
       const cloudClient = new SentinelRuntimeCloudClient({ endpoint: options.cloudEndpoint });
       if (!cloudClient.hasValidKey()) {
@@ -508,6 +513,15 @@ async function collectTetragonCommand(options) {
       incidentPublisher = new RuntimeIncidentPublisher({
         ledger, client: cloudClient, hostId, bootId,
         onStatus: status => process.stderr.write(`${JSON.stringify({ component: 'sentinel-cloud', ...status })}\n`)
+      });
+      taskExecutor = new InvestigationTaskExecutor({
+        client: cloudClient,
+        ledger,
+        hostId,
+        bootId,
+        enabled: options.investigationTasks === true,
+        intervalMs: numberOption('taskPollIntervalMs', 15000, 5000, 300000),
+        onStatus: status => process.stderr.write(`${JSON.stringify({ component: 'runtime-investigation-tasks', ...status })}\n`)
       });
     }
     const collector = new TetragonGrpcCollector({
@@ -527,14 +541,15 @@ async function collectTetragonCommand(options) {
         if (status.type === 'connected' && /^v?1\.8\.0$/.test(status.tetragon_version || '')) verifiedSensorVersion = status.tetragon_version;
         else if (status.type === 'reconnecting') verifiedSensorVersion = null;
         if (incidentPublisher && status.type === 'connected') {
-          void incidentPublisher.sendHeartbeat({ status: 'HEALTHY', tetragonVersion: status.tetragon_version, runtimeVersion: '0.2.0' });
+          void incidentPublisher.sendHeartbeat({ status: 'HEALTHY', tetragonVersion: status.tetragon_version, runtimeVersion: '0.2.0', capabilities: taskExecutor?.capabilities() });
         } else if (incidentPublisher && status.type === 'reconnecting') {
-          void incidentPublisher.sendHeartbeat({ status: 'DEGRADED' });
+          void incidentPublisher.sendHeartbeat({ status: 'DEGRADED', capabilities: taskExecutor?.capabilities() });
         }
         process.stderr.write(`${JSON.stringify({ component: 'tetragon-collector', ...status })}\n`);
       }
     });
     let metricsTask = null;
+    let taskTask = null;
     let metricsFailure = null;
     if (options.metricsUrl) {
       const metricsCollector = new TetragonMetricsCollector({
@@ -555,13 +570,19 @@ async function collectTetragonCommand(options) {
         if (!abortController.signal.aborted) abortController.abort(error);
       });
     }
+    if (taskExecutor?.enabled) {
+      taskTask = taskExecutor.run(abortController.signal).catch(error => {
+        process.stderr.write(`${JSON.stringify({ component: 'runtime-investigation-tasks', type: 'task_runner_stopped', error: error.message })}\n`);
+      });
+    }
     try {
       result = await collector.run(abortController.signal);
     } finally {
       if (metricsTask) {
         if (!abortController.signal.aborted) abortController.abort(new Error('Tetragon gRPC collector stopped'));
-        await metricsTask;
       }
+      if ((metricsTask || taskTask) && !abortController.signal.aborted) abortController.abort(new Error('Runtime collector stopped'));
+      await Promise.all([metricsTask, taskTask].filter(Boolean));
     }
     if (metricsFailure) throw metricsFailure;
   } finally {
@@ -570,7 +591,8 @@ async function collectTetragonCommand(options) {
     ledger.close();
   }
   console.log(JSON.stringify({ ...result, address, cloud_publishing_enabled: options.cloud === true,
-    metrics_polling_enabled: Boolean(options.metricsUrl), metrics_url: options.metricsUrl || null, mode: 'observe-only' }, null, 2));
+    metrics_polling_enabled: Boolean(options.metricsUrl), metrics_url: options.metricsUrl || null,
+    investigation_tasks_enabled: options.investigationTasks === true, investigation_task_mode: 'L0_READ_ONLY_FIXED_PLAYBOOKS', mode: 'observe-only' }, null, 2));
   return 0;
 }
 

@@ -1,5 +1,5 @@
 [Unit]
-Description=Sentinel Runtime observe-only Tetragon collector
+Description=Sentinel Runtime observe-only Tetragon collector with Sentinel Cloud publishing
 Wants=network-online.target
 Requires=sentinel-runtime-proxy.service
 After=network-online.target sentinel-runtime-proxy.service
@@ -12,7 +12,7 @@ User=sentinel-runtime
 Group=sentinel-runtime
 EnvironmentFile=/etc/sentinel-runtime/sentinel-runtime.env
 WorkingDirectory=/opt/sentinel-runtime
-ExecStart=/usr/bin/node /opt/sentinel-runtime/bin/sentinel-runtime.js collect-tetragon --address ${SENTINEL_RUNTIME_ADDRESS} --host-id ${SENTINEL_RUNTIME_HOST_ID} --boot-id-file /proc/sys/kernel/random/boot_id --db /var/lib/sentinel-runtime/runtime.sqlite
+ExecStart=/usr/bin/env node /opt/sentinel-runtime/bin/sentinel-runtime.js collect-tetragon --address ${SENTINEL_RUNTIME_ADDRESS} --host-id ${SENTINEL_RUNTIME_HOST_ID} --boot-id-file /proc/sys/kernel/random/boot_id --db /var/lib/sentinel-runtime/runtime.sqlite --intelligence --cloud --investigation-tasks --cloud-endpoint ${SENTINEL_RUNTIME_CLOUD_ENDPOINT} --metrics-url http://127.0.0.1:2112/metrics
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s
@@ -23,7 +23,8 @@ StateDirectoryMode=0700
 NoNewPrivileges=true
 CapabilityBoundingSet=
 PrivateDevices=true
-PrivateTmp=true
+# L0 metadata checks must resolve evidence-derived /tmp paths on the host.
+PrivateTmp=false
 ProtectHome=true
 ProtectSystem=strict
 ProtectKernelTunables=true

@@ -92,6 +92,7 @@ class SentinelRuntimeCloudClient {
       tetragon_version: data.tetragonVersion || 'v1.8.0',
       runtime_version: data.runtimeVersion || '0.1.0',
       loss_events_count: data.lossEventsCount || 0,
+      capabilities: data.capabilities && typeof data.capabilities === 'object' ? data.capabilities : undefined,
     };
 
     return this._post('/api/runtime/heartbeat', payload, { expectedHeartbeat: true });
@@ -114,6 +115,38 @@ class SentinelRuntimeCloudClient {
       expectedClientIncidentId: envelope.incident_id,
       expectedIdempotencyKey: envelope.idempotency_key
     });
+  }
+
+  async pollInvestigationTasks(data = {}) {
+    if (!this.hasValidKey()) return { ok: false, offline: true, error: 'NO_VALID_RUNTIME_KEY' };
+    const response = await this._post('/api/runtime/tasks/poll', {
+      agent_version: data.agentVersion || '0.2.0',
+      capabilities: data.capabilities || { investigation_tasks: false, playbooks: [] },
+    });
+    if (!response.ok) return response;
+    const tasks = response.data.tasks;
+    if (response.data.ok !== true || !Array.isArray(tasks) || tasks.length > 4 || tasks.some((task) =>
+      !task || typeof task !== 'object' || !/^inv_task_[a-f0-9]{24}$/.test(task.task_id || '') ||
+      !/^[a-f0-9]{32}$/.test(task.nonce || '') || typeof task.playbook_id !== 'string' ||
+      typeof task.expires_at !== 'string' || !Number.isFinite(Date.parse(task.expires_at)) ||
+      !Number.isSafeInteger(task.timeout_ms) || !Number.isSafeInteger(task.max_output_bytes) ||
+      !task.scope || typeof task.scope !== 'object' || Array.isArray(task.scope))) {
+      return { ok: false, offline: false, error: 'INVALID_CLOUD_TASK_RESPONSE' };
+    }
+    return response;
+  }
+
+  async sendInvestigationTaskResult(payload) {
+    if (!this.hasValidKey()) return { ok: false, offline: true, error: 'NO_VALID_RUNTIME_KEY' };
+    if (!payload || typeof payload.task_id !== 'string' || !/^inv_task_[a-f0-9]{24}$/.test(payload.task_id)) {
+      return { ok: false, offline: false, error: 'INVALID_TASK_RESULT' };
+    }
+    const response = await this._post(`/api/runtime/tasks/${encodeURIComponent(payload.task_id)}/result`, payload);
+    if (!response.ok) return response;
+    if (response.data.task_id !== payload.task_id || typeof response.data.status !== 'string' || typeof response.data.duplicate !== 'boolean') {
+      return { ok: false, offline: false, error: 'INVALID_CLOUD_TASK_RESULT_RESPONSE' };
+    }
+    return response;
   }
 
   async _post(urlPath, payload, expectations = {}) {
