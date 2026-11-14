@@ -78,9 +78,10 @@ test('Tetragon gRPC collector ingests protobuf wire events, checkpoints commits,
       process_exit: { process: { exec_id: 'exec-grpc-1', pid: { value: 101 }, start_time: { seconds: '1793603690', nanos: 100000000 }, binary: '/usr/bin/node' }, status: 0, signal: '' }
     }
   ];
+  let eventRequest;
   server.addService(api.service.service, {
     getVersion(_call, callback) { callback(null, { version: 'v1.8.0' }); },
-    getEvents(call) { for (const response of responses) call.write(response); call.end(); }
+    getEvents(call) { eventRequest = call.request; for (const response of responses) call.write(response); call.end(); }
   });
   const port = await new Promise((resolve, reject) => {
     server.bindAsync('127.0.0.1:0', api.grpc.ServerCredentials.createInsecure(), (error, boundPort) => error ? reject(error) : resolve(boundPort));
@@ -94,6 +95,9 @@ test('Tetragon gRPC collector ingests protobuf wire events, checkpoints commits,
       expectedNodeName: 'node-a', connectionFactory: async () => ({ client: connection, close: () => connection.close(), transportProtocol: 'GRPC_TCP', transportAuthentication: 'TLS_SERVER_AUTH' })
     });
     const result = await collector.run();
+    assert.deepEqual(eventRequest.allow_list, [
+      { event_set: ['PROCESS_EXEC', 'PROCESS_EXIT', 'PROCESS_KPROBE', 'PROCESS_TRACEPOINT', 'PROCESS_LOADER', 'PROCESS_UPROBE', 'PROCESS_THROTTLE', 'PROCESS_LSM', 'PROCESS_USDT', 'RATE_LIMIT_INFO'] }
+    ]);
     assert.equal(result.received, 5);
     assert.equal(result.persisted, 8);
     assert.equal(result.duplicate_events_suppressed, 0);
@@ -264,6 +268,45 @@ test('Tetragon node identity mismatch is fatal before the event reaches the ledg
   }
 });
 
+test('Tetragon persistence failure retains the cause and handles delayed cancellation errors', { timeout: 15000 }, async () => {
+  const api = loadTetragonApi();
+  const { directory, ledger } = tempLedger();
+  const response = rawDecodedResponse(api, processExec('persistence-failure'));
+  const stream = new EventEmitter();
+  stream.pause = () => {};
+  stream.resume = () => {};
+  stream.cancel = () => {
+    process.nextTick(() => stream.emit('error', Object.assign(new Error('1 CANCELLED: Cancelled on client'), { code: 1 })));
+  };
+  const client = {
+    getVersion(_request, _options, callback) { callback(null, { version: 'v1.8.0' }); },
+    getEvents() {
+      process.nextTick(() => stream.emit('data', response));
+      return stream;
+    }
+  };
+  const originalRecordEventsWithCheckpoint = ledger.recordEventsWithCheckpoint.bind(ledger);
+  const collector = new TetragonGrpcCollector({
+    ledger, hostId: 'host-a', bootId: 'boot-a', batchSize: 1,
+    connectionFactory: async () => {
+      // Fail only after startup health/checkpoint records have been persisted.
+      ledger.recordEventsWithCheckpoint = () => { throw new Error('injected persistence failure'); };
+      return { client, close() {}, transportProtocol: 'GRPC_TCP' };
+    }
+  });
+  try {
+    await assert.rejects(() => collector.run(), /injected persistence failure/);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    ledger.recordEventsWithCheckpoint = originalRecordEventsWithCheckpoint;
+    assert.ok(stream.listenerCount('error') >= 1, 'late grpc-js cancellation errors must remain handled');
+    assert.equal(ledger.verifyIntegrity().valid, true);
+  } finally {
+    ledger.recordEventsWithCheckpoint = originalRecordEventsWithCheckpoint;
+    ledger.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('Tetragon queue overflow records a lower bound and stops retrying on abort', async () => {
   const api = loadTetragonApi();
   const { directory, ledger } = tempLedger();
@@ -293,6 +336,46 @@ test('Tetragon queue overflow records a lower bound and stops retrying on abort'
     assert.ok(health.some(row => JSON.parse(row.payload_json).event.event_type === 'COLLECTOR_QUEUE_OVERFLOW'));
     assert.equal(ledger.verifyIntegrity().valid, true);
   } finally {
+    ledger.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Tetragon collector yields under a busy stream and accounts queued events discarded at shutdown', { timeout: 5000 }, async () => {
+  const api = loadTetragonApi();
+  const { directory, ledger } = tempLedger();
+  const responses = Array.from({ length: 64 }, (_, index) => rawDecodedResponse(api, processExec(`shutdown-exec-${index}`)));
+  const controller = new AbortController();
+  let cancelled = false;
+  let abortTimer = null;
+  const client = {
+    getVersion(_request, _options, callback) { callback(null, { version: 'v1.8.0' }); },
+    getEvents() {
+      const stream = new EventEmitter();
+      stream.pause = () => { if (!abortTimer) abortTimer = setTimeout(() => controller.abort(), 0); };
+      stream.resume = () => {};
+      stream.cancel = () => { cancelled = true; };
+      setImmediate(() => {
+        for (const response of responses) stream.emit('data', response);
+      });
+      return stream;
+    }
+  };
+  const collector = new TetragonGrpcCollector({
+    ledger, hostId: 'host-shutdown', bootId: 'boot-shutdown', batchSize: 16, queueCapacity: 64,
+    connectionFactory: async () => ({ client, close() {}, transportProtocol: 'GRPC_TCP' })
+  });
+  const started = Date.now();
+  try {
+    const result = await collector.run(controller.signal);
+    assert.ok(Date.now() - started < 1500, 'shutdown must not wait for the entire stream backlog');
+    assert.ok(BigInt(result.shutdown_queue_discarded_lower_bound) > 0n);
+    const health = ledger.getRecords({ limit: 1000 }).filter(row => row.record_type === 'sensor_health');
+    assert.ok(health.some(row => JSON.parse(row.payload_json).event.event_type === 'COLLECTOR_SHUTDOWN_QUEUE_DISCARD'));
+    assert.ok(health.some(row => JSON.parse(row.payload_json).event.event_type === 'COLLECTOR_STOPPED'));
+    assert.equal(ledger.verifyIntegrity().valid, true);
+  } finally {
+    if (abortTimer) clearTimeout(abortTimer);
     ledger.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }

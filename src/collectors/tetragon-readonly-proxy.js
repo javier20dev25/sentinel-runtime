@@ -6,6 +6,8 @@ const { createTetragonConnection, getAgentVersion, SUPPORTED_TETRAGON_VERSION } 
 const { loadTetragonApi, getRawResponseBytes } = require('./tetragon-proto');
 
 const DEFAULT_LISTEN_ADDRESS = 'unix:///run/sentinel-runtime/tetragon-readonly.sock';
+const MAX_ACTIVE_GETEVENTS_STREAMS = 1;
+const MAX_CONCURRENT_GRPC_STREAMS = 8;
 const DEFAULT_SOCKET_MODE = 0o600;
 const MAX_SHUTDOWN_WAIT_MS = 30000;
 
@@ -79,7 +81,11 @@ async function startTetragonReadOnlyProxy(options = {}) {
   });
   let bound = false;
   let ownedSocket = null;
-  const server = new api.grpc.Server({ 'grpc.max_concurrent_streams': 128 });
+  // A single Runtime collector needs one long-lived stream. Bounding both the
+  // HTTP/2 connection and active upstream subscriptions prevents a process
+  // with access to the local socket from multiplying load on Tetragon.
+  const server = new api.grpc.Server({ 'grpc.max_concurrent_streams': MAX_CONCURRENT_GRPC_STREAMS });
+  let activeEventStreams = 0;
   try {
     const currentUmask = process.umask();
     if ((currentUmask & 0o022) !== 0o022) {
@@ -95,15 +101,30 @@ async function startTetragonReadOnlyProxy(options = {}) {
         else upstream.client.getVersion(call.request, { deadline }, callback);
       },
       getEvents(call) {
+        if (activeEventStreams >= MAX_ACTIVE_GETEVENTS_STREAMS) {
+          call.emit('error', Object.assign(
+            new Error('Tetragon read-only proxy already has its Runtime event stream'),
+            { code: 8 } // RESOURCE_EXHAUSTED
+          ));
+          return;
+        }
+        activeEventStreams++;
         let upstreamStream;
-        try { upstreamStream = upstream.client.getEvents(call.request); }
-        catch (error) { call.destroy(error); return; }
         let ended = false;
+        let released = false;
+        const releaseSlot = () => {
+          if (released) return;
+          released = true;
+          activeEventStreams--;
+        };
+        try { upstreamStream = upstream.client.getEvents(call.request); }
+        catch (error) { releaseSlot(); call.emit('error', error); return; }
         const stopUpstream = () => {
           if (!ended) {
             ended = true;
             try { upstreamStream.cancel(); } catch { /* stream may already be closed */ }
           }
+          releaseSlot();
         };
         const onDrain = () => upstreamStream.resume?.();
         call.on('cancelled', stopUpstream);
@@ -118,13 +139,15 @@ async function startTetragonReadOnlyProxy(options = {}) {
           if (!ended) {
             ended = true;
             call.removeListener('drain', onDrain);
-            call.destroy(error);
+            releaseSlot();
+            call.emit('error', error);
           }
         });
         upstreamStream.once('end', () => {
           if (!ended) {
             ended = true;
             call.removeListener('drain', onDrain);
+            releaseSlot();
             call.end();
           }
         });

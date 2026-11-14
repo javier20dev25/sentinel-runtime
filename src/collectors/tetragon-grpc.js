@@ -22,6 +22,16 @@ const DEFAULT_QUEUE_BYTE_CAPACITY = 64 * 1024 * 1024;
 const MAX_QUEUE_BYTE_CAPACITY = 256 * 1024 * 1024;
 const DEFAULT_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30000;
+const RUNTIME_EVENT_TYPES = Object.freeze([
+  'PROCESS_EXEC', 'PROCESS_EXIT', 'PROCESS_KPROBE', 'PROCESS_TRACEPOINT', 'PROCESS_LOADER',
+  'PROCESS_UPROBE', 'PROCESS_THROTTLE', 'PROCESS_LSM', 'PROCESS_USDT', 'RATE_LIMIT_INFO'
+]);
+const RUNTIME_EVENT_REQUEST = Object.freeze({
+  // Tetragon ORs allow_list entries. An event_set-only filter already spans
+  // host and workload events; adding namespace-only entries broadens the
+  // stream to every event type and can overwhelm the observer.
+  allow_list: Object.freeze([Object.freeze({ event_set: RUNTIME_EVENT_TYPES })])
+});
 const FATAL_GRPC_CODES = new Set([3, 5, 7, 9, 12, 16]); // INVALID_ARGUMENT, NOT_FOUND, PERMISSION_DENIED, FAILED_PRECONDITION, UNIMPLEMENTED, UNAUTHENTICATED
 const OBSERVABILITY_STATES = Object.freeze({
   HEALTHY: 'HEALTHY',
@@ -181,6 +191,8 @@ class TetragonGrpcCollector {
       rate_limit_reports: 0,
       queue_drops_lower_bound: '0',
       queue_dropped_bytes_lower_bound: '0',
+      shutdown_queue_discarded_lower_bound: '0',
+      shutdown_queue_discarded_bytes_lower_bound: '0',
       unprocessed_at_limit_lower_bound: '0',
       cloud_incidents_queued: 0,
       cloud_incidents_sent: 0,
@@ -376,6 +388,19 @@ class TetragonGrpcCollector {
         });
         if (result.intentionalStop) {
           intentionalStop = true;
+          if (result.shutdownDiscardedEvents > 0) {
+            this.metrics.shutdown_queue_discarded_lower_bound = (BigInt(this.metrics.shutdown_queue_discarded_lower_bound) + BigInt(result.shutdownDiscardedEvents)).toString();
+            this.metrics.shutdown_queue_discarded_bytes_lower_bound = (BigInt(this.metrics.shutdown_queue_discarded_bytes_lower_bound) + BigInt(result.shutdownDiscardedBytes)).toString();
+            this.markObservabilityDegraded('COLLECTOR_SHUTDOWN_QUEUE_DISCARD');
+            this.recordHealth('COLLECTOR_SHUTDOWN_QUEUE_DISCARD', {
+              stream_epoch: streamEpoch,
+              shutdown_discarded_events_lower_bound: String(result.shutdownDiscardedEvents),
+              shutdown_discarded_bytes_lower_bound: String(result.shutdownDiscardedBytes),
+              stream_gap_state: 'UNKNOWN',
+              source_replay_available: false,
+              ...this.observabilityDetails()
+            });
+          }
           if (result.queueDrops > 0) {
             this.metrics.queue_drops_lower_bound = (BigInt(this.metrics.queue_drops_lower_bound) + BigInt(result.queueDrops)).toString();
             this.metrics.queue_dropped_bytes_lower_bound = (BigInt(this.metrics.queue_dropped_bytes_lower_bound) + BigInt(result.queueDroppedBytes)).toString();
@@ -431,6 +456,10 @@ class TetragonGrpcCollector {
           stream_epoch: streamEpoch,
           message: safeErrorMessage(error),
           grpc_code: error.code ?? null,
+          persistence_stage: error.persistenceStage || null,
+          database_error_code: error.code || null,
+          database_error_number: Number.isInteger(error.errcode) ? error.errcode : null,
+          transaction_rollback_error: error.rollbackError || null,
           stream_gap_state: 'UNKNOWN',
           source_replay_available: false,
           last_committed_checkpoint: previousCheckpoint,
@@ -458,7 +487,7 @@ class TetragonGrpcCollector {
   }
 
   async consumeConnection(connection, session) {
-    const stream = connection.client.getEvents({});
+    const stream = connection.client.getEvents(RUNTIME_EVENT_REQUEST);
     const queue = [];
     const capacity = this.queueCapacity;
     const byteCapacity = this.queueByteCapacity;
@@ -469,6 +498,8 @@ class TetragonGrpcCollector {
     let intentionalStop = false;
     let queueDrops = 0;
     let queueDroppedBytes = 0;
+    let shutdownDiscardedEvents = 0;
+    let shutdownDiscardedBytes = 0;
     let unprocessedAtLimit = 0;
     let unprocessedBytesAtLimit = 0;
     let receivedThisSession = 0;
@@ -478,6 +509,7 @@ class TetragonGrpcCollector {
     let lastEventKey = null;
     let flushTimer = null;
     let failed = false;
+    let nextCooperativeYieldAt = 32;
 
     const notify = () => {
       if (wake) { const resolve = wake; wake = null; resolve(); }
@@ -508,6 +540,7 @@ class TetragonGrpcCollector {
       notify();
     };
     const onError = error => { if (!terminal) { terminalError = error; terminal = true; notify(); } };
+    const ignorePostCancelError = () => {};
     const onEnd = () => { terminal = true; notify(); };
     const onAbort = () => { terminal = true; cancel(); notify(); };
     stream.on('data', onData);
@@ -572,6 +605,19 @@ class TetragonGrpcCollector {
 
     try {
       while (true) {
+        if (receivedThisSession >= nextCooperativeYieldAt) {
+          nextCooperativeYieldAt += 32;
+          await yieldToEventLoop();
+        }
+        if (session.signal?.aborted) {
+          shutdownDiscardedEvents = queue.length;
+          shutdownDiscardedBytes = queuedBytes;
+          queue.length = 0;
+          queuedBytes = 0;
+          if (pending.length) flush();
+          intentionalStop = true;
+          break;
+        }
         if (queue.length === 0) {
           if (terminal) break;
           await new Promise(resolve => { wake = resolve; });
@@ -784,7 +830,7 @@ class TetragonGrpcCollector {
         terminalError.queueDroppedBytes = queueDroppedBytes;
         throw terminalError;
       }
-      return { intentionalStop, queueDrops, queueDroppedBytes, unprocessedAtLimit, unprocessedBytesAtLimit, received: receivedThisSession };
+      return { intentionalStop, queueDrops, queueDroppedBytes, shutdownDiscardedEvents, shutdownDiscardedBytes, unprocessedAtLimit, unprocessedBytesAtLimit, received: receivedThisSession };
     } catch (error) {
       failed = true;
       if (queueDrops > 0) error.queueDrops = queueDrops;
@@ -796,18 +842,17 @@ class TetragonGrpcCollector {
     } finally {
       if (flushTimer) clearTimeout(flushTimer);
       stream.removeListener('data', onData);
-      // grpc-js may deliver its CANCELLED error after cancel() and after the
-      // consumer has drained; keep a terminal listener to avoid an unhandled
-      // EventEmitter error escaping after a clean max-events or signal stop.
-      if (terminal) {
-        stream.removeListener('error', onError);
-        stream.on('error', () => {});
-      } else {
-        stream.removeListener('error', onError);
-      }
       stream.removeListener('end', onEnd);
       session.signal?.removeEventListener('abort', onAbort);
-      if (!terminal) cancel();
+      // Install a terminal listener before cancellation. grpc-js can emit its
+      // CANCELLED error asynchronously after a processing/persistence failure;
+      // removing the only error listener first would crash the Runtime process.
+      stream.on('error', ignorePostCancelError);
+      stream.removeListener('error', onError);
+      if (!terminal) {
+        terminal = true;
+        cancel();
+      }
       if (failed) this.onStatus({ type: 'stream_failed', stream_epoch: session.streamEpoch });
     }
   }
@@ -947,6 +992,8 @@ function safeErrorMessage(error) {
 }
 
 function jitter(delayMs) { return Math.max(100, Math.floor(delayMs * (0.8 + Math.random() * 0.4))); }
+
+function yieldToEventLoop() { return new Promise(resolve => setImmediate(resolve)); }
 
 function delayWithSignal(ms, signal) {
   if (signal?.aborted) return Promise.resolve();

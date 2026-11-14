@@ -93,3 +93,60 @@ test('read-only Tetragon proxy passes stream/version RPCs and rejects policy adm
   }
   assert.equal(proxySocketRemoved, true);
 });
+
+test('read-only Tetragon proxy permits one upstream event stream and releases it on cancellation', { skip: process.platform !== 'linux', timeout: 15000 }, async () => {
+  const api = loadTetragonApi();
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sentinel-runtime-ro-proxy-limit-'));
+  const upstreamPath = path.join(directory, 'upstream.sock');
+  const listenPath = path.join(directory, 'readonly.sock');
+  const upstreamServer = new api.grpc.Server();
+  let upstreamCalls = 0;
+  upstreamServer.addService(api.service.service, {
+    getVersion(_call, callback) { callback(null, { version: 'v1.8.0' }); },
+    getEvents(call) {
+      upstreamCalls++;
+      call.write({ node_name: `node-${upstreamCalls}` });
+    }
+  });
+
+  let proxy;
+  let client;
+  try {
+    await new Promise((resolve, reject) => {
+      upstreamServer.bindAsync(`unix://${upstreamPath}`, api.grpc.ServerCredentials.createInsecure(), error => error ? reject(error) : resolve());
+    });
+    fs.chmodSync(upstreamPath, 0o600);
+    proxy = await startTetragonReadOnlyProxy({
+      upstreamAddress: `unix://${upstreamPath}`,
+      listenAddress: `unix://${listenPath}`,
+      socketMode: '0600'
+    });
+    client = new api.service(`unix://${listenPath}`, api.grpc.credentials.createInsecure());
+
+    const first = client.getEvents({});
+    await new Promise((resolve, reject) => {
+      first.once('data', resolve);
+      first.once('error', reject);
+    });
+
+    const rejected = client.getEvents({});
+    const error = await new Promise(resolve => rejected.once('error', resolve));
+    assert.equal(error.code, api.grpc.status.RESOURCE_EXHAUSTED);
+    assert.equal(upstreamCalls, 1, 'the rejected client must not open another Tetragon stream');
+
+    first.cancel();
+    await new Promise(resolve => setTimeout(resolve, 25));
+    const replacement = client.getEvents({});
+    await new Promise((resolve, reject) => {
+      replacement.once('data', resolve);
+      replacement.once('error', reject);
+    });
+    assert.equal(upstreamCalls, 2, 'a new stream is allowed after the previous client disconnects');
+    replacement.cancel();
+  } finally {
+    try { client?.close(); } catch { /* best-effort teardown */ }
+    if (proxy) await proxy.close(1000);
+    upstreamServer.forceShutdown();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
