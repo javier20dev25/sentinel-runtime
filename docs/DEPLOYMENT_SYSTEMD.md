@@ -50,6 +50,19 @@ The collector template uses `MemoryHigh=512M`, `MemoryMax=768M`, `CPUQuota=200%`
 
 The local gateway permits one active `GetEvents` subscription globally and up to eight concurrent gRPC streams per client connection. The Runtime collector uses one persistent event stream. Additional event-stream clients receive gRPC `RESOURCE_EXHAUSTED`; keep the Unix socket and its group limited to the dedicated service identities. This prevents local clients from multiplying subscriptions to Tetragon through the gateway.
 
+## Tetragon event scope
+
+By default, Runtime requests core process lifecycle and sensor-throttle event types. It does not subscribe to every kprobe, tracepoint, uprobe, LSM, or USDT event. To receive policy-driven event families, pass one or more exact Tetragon policy names:
+
+```sh
+node /opt/sentinel-runtime/bin/sentinel-runtime.js collect-tetragon \
+  --address unix:///run/sentinel-runtime/tetragon-readonly.sock \
+  --host-id host-prod-01 --boot-id-file /proc/sys/kernel/random/boot_id \
+  --tetragon-policy-name sentinel-runtime-observability
+```
+
+Repeat `--tetragon-policy-name` for each policy. The gRPC request uses separate allow-list entries: core events stand on their own; policy-generated event types must also match a configured policy name. Keep the policy set limited to reviewed Runtime TracingPolicies. This limits events delivered to Runtime, but does not disable Tetragon probes or prove that Tetragon did not drop events before delivery. Continue monitoring Tetragon loss metrics and Runtime observability state. Tetragon v1.8.0 field definitions are pinned in [`events.proto`](../vendor/tetragon/v1.8.0/api/v1/tetragon/events.proto).
+
 ## Read-only local gateway
 
 The optional `tetragon-readonly-proxy` command opens an upstream Tetragon v1.8.0 connection and registers only `GetVersion` and `GetEvents` on its client-facing gRPC server. Policy mutation, debug, sensor control, and other RPCs return `UNIMPLEMENTED`. It allows one active event subscription and returns `RESOURCE_EXHAUSTED` to additional subscribers. The stream serializer forwards exact upstream protobuf bytes, preserving unknown fields and the evidence source hash. The proxy accepts only an absolute Unix-domain listener path, refuses an existing path or a group/world-writable parent directory, requires a umask that blocks group/world write during startup, defaults to mode `0600`, and removes only the socket inode it created. Use a protected runtime directory such as `/run/sentinel-runtime` and configure ownership/group access at the OS level.

@@ -8,7 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { EvidenceLedger } = require('../../src/evidence');
-const { TetragonGrpcCollector, createTetragonConnection, parseTetragonAddress } = require('../../src/collectors/tetragon-grpc');
+const { TetragonGrpcCollector, buildGetEventsRequest, createTetragonConnection, parseTetragonAddress } = require('../../src/collectors/tetragon-grpc');
 const { loadTetragonApi } = require('../../src/collectors/tetragon-proto');
 const { validateEventV2 } = require('../../src/contracts/validate-event-v2');
 const { DecisionEngine } = require('../../src/intelligence/decision-engine');
@@ -18,6 +18,28 @@ function tempLedger() {
   const ledger = new EvidenceLedger(path.join(directory, 'runtime.sqlite'));
   return { directory, ledger };
 }
+
+test('Tetragon GetEvents filters prioritize core process events and scope policy events by exact names', () => {
+  assert.deepEqual(buildGetEventsRequest(), {
+    allow_list: [
+      { event_set: ['PROCESS_EXEC', 'PROCESS_EXIT', 'PROCESS_LOADER', 'PROCESS_THROTTLE', 'RATE_LIMIT_INFO'] }
+    ]
+  });
+  assert.deepEqual(buildGetEventsRequest(['sentinel-runtime-observability', 'tenant-prod.runtime']), {
+    allow_list: [
+      { event_set: ['PROCESS_EXEC', 'PROCESS_EXIT', 'PROCESS_LOADER', 'PROCESS_THROTTLE', 'RATE_LIMIT_INFO'] },
+      {
+        event_set: ['PROCESS_KPROBE', 'PROCESS_TRACEPOINT', 'PROCESS_UPROBE', 'PROCESS_LSM', 'PROCESS_USDT'],
+        policy_names: ['sentinel-runtime-observability', 'tenant-prod.runtime']
+      }
+    ]
+  });
+  assert.throws(() => buildGetEventsRequest(['*']), /DNS subdomains/);
+  assert.throws(() => buildGetEventsRequest([`${'a'.repeat(64)}.policy`]), /DNS subdomains/);
+  assert.doesNotThrow(() => buildGetEventsRequest([`${'a'.repeat(63)}.policy`]));
+  assert.throws(() => buildGetEventsRequest(['sentinel-policy', 'sentinel-policy']), /Duplicate/);
+  assert.throws(() => buildGetEventsRequest(Array.from({ length: 33 }, (_, index) => `policy-${index}`)), /at most 32/);
+});
 
 function processExec(execId, nodeName = 'node-a') {
   return {
@@ -92,11 +114,13 @@ test('Tetragon gRPC collector ingests protobuf wire events, checkpoints commits,
     connection = new api.service(`127.0.0.1:${port}`, api.grpc.credentials.createInsecure());
     const collector = new TetragonGrpcCollector({
       ledger, hostId: 'host-a', bootId: 'boot-a', maxEvents: 5, batchSize: 2, flushIntervalMs: 50,
+      tetragonPolicyNames: ['sentinel-runtime-observability'],
       expectedNodeName: 'node-a', connectionFactory: async () => ({ client: connection, close: () => connection.close(), transportProtocol: 'GRPC_TCP', transportAuthentication: 'TLS_SERVER_AUTH' })
     });
     const result = await collector.run();
     assert.deepEqual(eventRequest.allow_list, [
-      { event_set: ['PROCESS_EXEC', 'PROCESS_EXIT', 'PROCESS_KPROBE', 'PROCESS_TRACEPOINT', 'PROCESS_LOADER', 'PROCESS_UPROBE', 'PROCESS_THROTTLE', 'PROCESS_LSM', 'PROCESS_USDT', 'RATE_LIMIT_INFO'] }
+      { event_set: ['PROCESS_EXEC', 'PROCESS_EXIT', 'PROCESS_LOADER', 'PROCESS_THROTTLE', 'RATE_LIMIT_INFO'] },
+      { event_set: ['PROCESS_KPROBE', 'PROCESS_TRACEPOINT', 'PROCESS_UPROBE', 'PROCESS_LSM', 'PROCESS_USDT'], policy_names: ['sentinel-runtime-observability'] }
     ]);
     assert.equal(result.received, 5);
     assert.equal(result.persisted, 8);
@@ -362,7 +386,7 @@ test('Tetragon collector yields under a busy stream and accounts queued events d
     }
   };
   const collector = new TetragonGrpcCollector({
-    ledger, hostId: 'host-shutdown', bootId: 'boot-shutdown', batchSize: 16, queueCapacity: 64,
+    ledger, hostId: 'host-shutdown', bootId: 'boot-shutdown', maxEvents: 100000, batchSize: 16, queueCapacity: 64,
     connectionFactory: async () => ({ client, close() {}, transportProtocol: 'GRPC_TCP' })
   });
   const started = Date.now();
@@ -372,7 +396,8 @@ test('Tetragon collector yields under a busy stream and accounts queued events d
     assert.ok(BigInt(result.shutdown_queue_discarded_lower_bound) > 0n);
     const health = ledger.getRecords({ limit: 1000 }).filter(row => row.record_type === 'sensor_health');
     assert.ok(health.some(row => JSON.parse(row.payload_json).event.event_type === 'COLLECTOR_SHUTDOWN_QUEUE_DISCARD'));
-    assert.ok(health.some(row => JSON.parse(row.payload_json).event.event_type === 'COLLECTOR_STOPPED'));
+    const stopped = health.map(row => JSON.parse(row.payload_json)).find(record => record.event.event_type === 'COLLECTOR_STOPPED');
+    assert.equal(stopped.details.reason, 'SIGNAL', 'a signal stop must not be mislabeled as a reached event limit');
     assert.equal(ledger.verifyIntegrity().valid, true);
   } finally {
     if (abortTimer) clearTimeout(abortTimer);
@@ -444,6 +469,8 @@ test('Tetragon max-events cutoff reports queued events separately from overflow'
     assert.equal(result.unprocessed_at_limit_lower_bound, '1');
     const health = ledger.getRecords({ limit: 100 }).filter(row => row.record_type === 'sensor_health');
     assert.ok(health.some(row => JSON.parse(row.payload_json).event.event_type === 'COLLECTOR_LIMIT_REACHED'));
+    const stopped = health.map(row => JSON.parse(row.payload_json)).find(record => record.event.event_type === 'COLLECTOR_STOPPED');
+    assert.equal(stopped.details.reason, 'MAX_EVENTS', 'a reached limit must be labeled distinctly from a signal stop');
     assert.equal(ledger.verifyIntegrity().valid, true);
   } finally {
     ledger.close();

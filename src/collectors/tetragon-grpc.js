@@ -22,16 +22,15 @@ const DEFAULT_QUEUE_BYTE_CAPACITY = 64 * 1024 * 1024;
 const MAX_QUEUE_BYTE_CAPACITY = 256 * 1024 * 1024;
 const DEFAULT_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30000;
-const RUNTIME_EVENT_TYPES = Object.freeze([
-  'PROCESS_EXEC', 'PROCESS_EXIT', 'PROCESS_KPROBE', 'PROCESS_TRACEPOINT', 'PROCESS_LOADER',
-  'PROCESS_UPROBE', 'PROCESS_THROTTLE', 'PROCESS_LSM', 'PROCESS_USDT', 'RATE_LIMIT_INFO'
+const CORE_EVENT_TYPES = Object.freeze([
+  'PROCESS_EXEC', 'PROCESS_EXIT', 'PROCESS_LOADER', 'PROCESS_THROTTLE', 'RATE_LIMIT_INFO'
 ]);
-const RUNTIME_EVENT_REQUEST = Object.freeze({
-  // Tetragon ORs allow_list entries. An event_set-only filter already spans
-  // host and workload events; adding namespace-only entries broadens the
-  // stream to every event type and can overwhelm the observer.
-  allow_list: Object.freeze([Object.freeze({ event_set: RUNTIME_EVENT_TYPES })])
-});
+const POLICY_EVENT_TYPES = Object.freeze([
+  'PROCESS_KPROBE', 'PROCESS_TRACEPOINT', 'PROCESS_UPROBE', 'PROCESS_LSM', 'PROCESS_USDT'
+]);
+const MAX_TRACING_POLICY_NAMES = 32;
+const MAX_TRACING_POLICY_NAME_LENGTH = 253;
+const TRACING_POLICY_NAME_RE = /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$/;
 const FATAL_GRPC_CODES = new Set([3, 5, 7, 9, 12, 16]); // INVALID_ARGUMENT, NOT_FOUND, PERMISSION_DENIED, FAILED_PRECONDITION, UNIMPLEMENTED, UNAUTHENTICATED
 const OBSERVABILITY_STATES = Object.freeze({
   HEALTHY: 'HEALTHY',
@@ -125,6 +124,36 @@ function sourceIdForHost(hostId, bootId) {
   return `tetragon:${hash}`;
 }
 
+function normalizeTracingPolicyNames(value = []) {
+  if (!Array.isArray(value) || value.length > MAX_TRACING_POLICY_NAMES) {
+    throw new TypeError(`tetragonPolicyNames must be an array of at most ${MAX_TRACING_POLICY_NAMES} policy names`);
+  }
+  const names = [];
+  const seen = new Set();
+  for (const name of value) {
+    if (typeof name !== 'string' || name.length === 0 || name.length > MAX_TRACING_POLICY_NAME_LENGTH ||
+        !TRACING_POLICY_NAME_RE.test(name) || name.split('.').some((label) => label.length > 63)) {
+      throw new TypeError('Tetragon tracing policy names must be lowercase DNS subdomains no longer than 253 characters');
+    }
+    if (seen.has(name)) throw new TypeError(`Duplicate Tetragon tracing policy name: ${name}`);
+    seen.add(name);
+    names.push(name);
+  }
+  return names;
+}
+
+function buildGetEventsRequest(policyNames = []) {
+  const names = normalizeTracingPolicyNames(policyNames);
+  const allowList = [{ event_set: [...CORE_EVENT_TYPES] }];
+  if (names.length > 0) {
+    // Tetragon ORs allow_list filters, while predicates within each Filter
+    // are ANDed. Keep noisy policy events scoped to explicitly selected
+    // policies so they cannot crowd native process lifecycle events out.
+    allowList.push({ event_set: [...POLICY_EVENT_TYPES], policy_names: names });
+  }
+  return { allow_list: allowList };
+}
+
 class TetragonGrpcCollector {
   constructor(options = {}) {
     if (!options.ledger || typeof options.ledger.recordEventsWithCheckpoint !== 'function') throw new TypeError('Evidence ledger with transactional checkpoints is required');
@@ -153,6 +182,7 @@ class TetragonGrpcCollector {
     this.maxEvents = maxEvents;
     this.expectedNodeName = options.expectedNodeName || null;
     this.captureProcessArguments = options.captureProcessArguments === true;
+    this.tetragonPolicyNames = normalizeTracingPolicyNames(options.tetragonPolicyNames);
     this.connectionFactory = options.connectionFactory;
     this.onStatus = typeof options.onStatus === 'function' ? options.onStatus : () => {};
     this.engine = options.engine || new BehavioralSequenceEngine();
@@ -338,6 +368,7 @@ class TetragonGrpcCollector {
     let retryDelay = DEFAULT_BACKOFF_MS;
     let hadDisconnect = false;
     let intentionalStop = false;
+    let stopReason = null;
     this.recordHealth('COLLECTOR_STARTED', {
       source_id: this.sourceId,
       replay_supported: false,
@@ -388,6 +419,7 @@ class TetragonGrpcCollector {
         });
         if (result.intentionalStop) {
           intentionalStop = true;
+          stopReason = result.stopReason || 'REQUESTED';
           if (result.shutdownDiscardedEvents > 0) {
             this.metrics.shutdown_queue_discarded_lower_bound = (BigInt(this.metrics.shutdown_queue_discarded_lower_bound) + BigInt(result.shutdownDiscardedEvents)).toString();
             this.metrics.shutdown_queue_discarded_bytes_lower_bound = (BigInt(this.metrics.shutdown_queue_discarded_bytes_lower_bound) + BigInt(result.shutdownDiscardedBytes)).toString();
@@ -477,7 +509,7 @@ class TetragonGrpcCollector {
       this.recordHealth('COLLECTOR_STOPPED', { reason: 'SIGNAL', source_id: this.sourceId, ...this.observabilityDetails() });
     } else if (intentionalStop) {
       this.recordHealth('COLLECTOR_STOPPED', {
-        reason: this.maxEvents === null ? 'REQUESTED' : 'MAX_EVENTS',
+        reason: stopReason || 'REQUESTED',
         source_id: this.sourceId,
         ...this.observabilityDetails()
       });
@@ -487,7 +519,7 @@ class TetragonGrpcCollector {
   }
 
   async consumeConnection(connection, session) {
-    const stream = connection.client.getEvents(RUNTIME_EVENT_REQUEST);
+    const stream = connection.client.getEvents(buildGetEventsRequest(this.tetragonPolicyNames));
     const queue = [];
     const capacity = this.queueCapacity;
     const byteCapacity = this.queueByteCapacity;
@@ -502,6 +534,7 @@ class TetragonGrpcCollector {
     let shutdownDiscardedBytes = 0;
     let unprocessedAtLimit = 0;
     let unprocessedBytesAtLimit = 0;
+    let stopReason = null;
     let receivedThisSession = 0;
     const pending = [];
     let streamSequence = 0n;
@@ -616,6 +649,7 @@ class TetragonGrpcCollector {
           queuedBytes = 0;
           if (pending.length) flush();
           intentionalStop = true;
+          stopReason = 'SIGNAL';
           break;
         }
         if (queue.length === 0) {
@@ -815,6 +849,7 @@ class TetragonGrpcCollector {
 
         if (this.maxEvents !== null && this.metrics.received >= this.maxEvents) {
           intentionalStop = true;
+          stopReason = 'MAX_EVENTS';
           terminal = true;
           if (queue.length > 0) unprocessedAtLimit = queue.length;
           if (queue.length > 0) unprocessedBytesAtLimit = queue.reduce((total, item) => total + item.byteLength, 0);
@@ -830,7 +865,7 @@ class TetragonGrpcCollector {
         terminalError.queueDroppedBytes = queueDroppedBytes;
         throw terminalError;
       }
-      return { intentionalStop, queueDrops, queueDroppedBytes, shutdownDiscardedEvents, shutdownDiscardedBytes, unprocessedAtLimit, unprocessedBytesAtLimit, received: receivedThisSession };
+      return { intentionalStop, stopReason, queueDrops, queueDroppedBytes, shutdownDiscardedEvents, shutdownDiscardedBytes, unprocessedAtLimit, unprocessedBytesAtLimit, received: receivedThisSession };
     } catch (error) {
       failed = true;
       if (queueDrops > 0) error.queueDrops = queueDrops;
@@ -1019,11 +1054,14 @@ function createUnknownLossMetrics(observedAt) {
 
 module.exports = {
   TetragonGrpcCollector,
+  buildGetEventsRequest,
   createTetragonConnection,
   getAgentVersion,
   parseTetragonAddress,
   sourceIdForHost,
   SUPPORTED_TETRAGON_VERSION,
   DEFAULT_QUEUE_CAPACITY,
+  CORE_EVENT_TYPES,
+  POLICY_EVENT_TYPES,
   OBSERVABILITY_STATES
 };

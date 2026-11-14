@@ -34,6 +34,7 @@ The proxy separates the collector from Tetragon’s administrative RPC surface a
 ## What is implemented
 
 - Tetragon v1.8.0 gRPC collection and bounded JSONL ingestion for documented native events and selected kprobes.
+- The default gRPC request asks for core process events only. Policy-driven event families are opt-in by exact `--tetragon-policy-name`; this reduces unrelated probe traffic without claiming that Tetragon generated no other events or that upstream drops are impossible.
 - Strict Event Contract v2 candidate validation, raw provider provenance, source-time preservation, and explicit unsupported/rejected records.
 - Bounded in-memory event queues and Cloud incident outbox; overload is surfaced as degraded observability instead of being reported as healthy.
 - Read-only proxy limits all clients to one active Tetragon event stream and eight concurrent gRPC streams per client connection; the systemd templates bound service CPU, memory, tasks, and open files.
@@ -61,7 +62,7 @@ flowchart TD
 |---|---|---|
 | Unprivileged user replaces Runtime files | Root-owned install with no group/other write; systemd read-only filesystem | A root user can change the install or service policy |
 | Collector or local socket client abuses Tetragon API | Separate proxy registers only GetVersion and GetEvents; one active GetEvents stream; gRPC streams capped; dedicated socket group | The proxy itself still has upstream sensor access |
-| Event flood / large frame / resource exhaustion | 16 MiB gRPC message limit; bounded event queue; systemd CPU, memory, task, and file limits; loss makes coverage degraded | It cannot recover events Tetragon already dropped; hitting the hard memory limit can restart the service |
+| Event flood / large frame / resource exhaustion | Core-event default; policy event families are filtered by explicit policy name; 16 MiB gRPC limit, bounded queue, and systemd CPU/memory/task/file limits; loss makes coverage degraded | Filtering does not disable Tetragon probes or recover upstream drops; hitting the hard memory limit can restart the service |
 | Cloud outage / incident burst | Bounded outbox with local ledger as primary record | Local disk usage is not capped; retention and anchoring remain operator work |
 | Runtime process crash or SIGKILL | systemd restart policy | It cannot report its own death while stopped; Cloud needs a stale-heartbeat monitor |
 | Compromised Cloud account | Runtime exposes no inbound Cloud-to-host task channel in this release | The host token authenticates outbound Runtime requests; it does not attest the host kernel or Runtime binary |

@@ -48,12 +48,20 @@ async function main(argv = process.argv.slice(2)) {
 }
 
 function parseOptions(args) {
+  // Repeated Tetragon policy filters are handled below.
   const options = {};
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (!arg.startsWith('--')) throw new Error(`Unexpected argument: ${arg}`);
     const key = arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     const value = args[i + 1];
+    if (key === 'tetragonPolicyName') {
+      if (value === undefined || value.startsWith('--')) throw new Error('--tetragon-policy-name requires a policy name');
+      if (!options.tetragonPolicyName) options.tetragonPolicyName = [];
+      options.tetragonPolicyName.push(value);
+      i++;
+      continue;
+    }
     if (value === undefined || value.startsWith('--')) options[key] = true;
     else { options[key] = value; i++; }
   }
@@ -113,6 +121,7 @@ Commands:
   collect-tetragon [--address unix:///run/sentinel-runtime/tetragon-readonly.sock]
     --host-id <stable-id> (--boot-id <trusted-id> | --boot-id-file <path>) [--tls-ca <pem>]
     [--cloud [--cloud-endpoint https://sentinel-cloud.example]]
+    [--tetragon-policy-name <exact-policy-name> ...]
     [--tls-client-cert <pem> --tls-client-key <pem>] [--expected-node-name <name>]
     [--max-events <n>] [--batch-size <n> --queue-capacity <n> --queue-mib <16..256>]
     [--profiles <json> --workload-id <id>] [--db <path>] [--capture-process-arguments]
@@ -138,6 +147,8 @@ and supported kprobe hooks. Process arguments are redacted by default; opt in wi
 --capture-process-arguments. The gRPC collector also records observed RateLimitInfo and unsupported event families. gRPC has no server replay cursor;
 disconnections are recorded with an UNKNOWN gap state. TCP requires TLS; plaintext is
 accepted only for a local Unix socket. No host enforcement or fleet manager is implemented.
+The default GetEvents subscription collects core process events. Policy-driven event families
+are excluded unless one or more exact --tetragon-policy-name values are supplied.
 `);
 }
 
@@ -514,6 +525,7 @@ async function collectTetragonCommand(options) {
       ledger, hostId, bootId, workloadId: options.workloadId || 'unassigned', profiles: profileMap,
       incidentPublisher,
       expectedNodeName: options.expectedNodeName || null, maxEvents,
+      tetragonPolicyNames: options.tetragonPolicyName,
       captureProcessArguments: options.captureProcessArguments === true,
       intelligence: options.intelligence === true,
       batchSize: numberOption('batchSize', 128, 1, 4096),

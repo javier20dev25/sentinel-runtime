@@ -52,6 +52,7 @@ Sentinel Runtime commands are invoked via `sentinel-runtime <command> [options]`
 | `--profiles` | File Path | *(None)* | Path to JSON file defining deterministic `WorkloadProfile` policies. |
 | `--capture-process-arguments` | Boolean | `false` | Opts in to bounded string capture of process CLI arguments (default is policy-redacted). |
 | `--expected-node-name` | String | *(None)* | Pin expected Tetragon `node_name`; drops or rejects mismatches. |
+| `--tetragon-policy-name` | Repeatable string | *(None)* | Opt in to policy-generated event families for this exact Tetragon TracingPolicy name. The default request contains core process event types only. |
 | `--max-events` | Integer | *(Unlimited)* | Terminates collector gracefully after processing $N$ events. |
 
 ### TLS & Network Security Options

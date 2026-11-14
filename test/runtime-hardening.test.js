@@ -13,9 +13,17 @@ const { validateEventV2, validateCursor } = require('../src/contracts/validate-e
 const { canonicalJson } = require('../src/contracts/canonical-json');
 const { BehavioralSequenceEngine } = require('../src/engine');
 const { EvidenceLedger } = require('../src/evidence');
-const { main: runCli, resolveBootId } = require('../bin/sentinel-runtime');
+const { main: runCli, parseOptions, resolveBootId } = require('../bin/sentinel-runtime');
 
 const fixturesDir = path.join(__dirname, 'fixtures/events/v2');
+
+test('CLI collects repeated exact Tetragon policy names and rejects missing values', () => {
+  assert.deepEqual(parseOptions([
+    '--tetragon-policy-name', 'sentinel-runtime-observability',
+    '--tetragon-policy-name', 'tenant-prod.runtime'
+  ]), { tetragonPolicyName: ['sentinel-runtime-observability', 'tenant-prod.runtime'] });
+  assert.throws(() => parseOptions(['--tetragon-policy-name']), /requires a policy name/);
+});
 
 test('Binary policy requires exact absolute paths or a pinned SHA-256 digest', () => {
   const profile = new WorkloadProfile({ allowedBinaries: ['/usr/bin/node', `sha256:${'a'.repeat(64)}`] });

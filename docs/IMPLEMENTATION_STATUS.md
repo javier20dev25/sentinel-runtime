@@ -7,7 +7,7 @@
 ## Implemented
 
 - Observe-only Node.js CLI and library for Linux runtime telemetry.
-- Tetragon v1.8.0 gRPC collector with explicit host/workload event subscriptions, pinned protobuf definitions, bounded message sizes, bounded event/byte queue, event validation, and explicit stream-gap state.
+- Tetragon v1.8.0 gRPC collector with a core-event default and policy-name-scoped opt-in for probe event families, pinned protobuf definitions, bounded message sizes, bounded event/byte queue, event validation, and explicit stream-gap state.
 - JSONL ingestion with bounded frame size, UTF-8 validation, duplicate-key rejection, immutable-source fingerprinting, optional atomic resume checkpoints, and explicit unsupported-event records.
 - Supported Tetragon process lifecycle records and selected, explicitly labeled kprobe shapes. Incomplete or unsupported shapes are not guessed.
 - Event Contract v2 candidate materializer and validator. Native open hooks preserve raw absolute, relative, or empty pathname operands and dirfd. The candidate schema is not frozen.
