@@ -4,3 +4,5 @@ node_modules/
 *.sqlite-shm
 .DS_Store
 Thumbs.db
+__pycache__/
+*.py[cod]

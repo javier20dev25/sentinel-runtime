@@ -10,7 +10,7 @@ console.log('=== SENTINEL RUNTIME // BEHAVIORAL SUPERVISION LAB ===\n');
 
 const ledger = new EvidenceLedger(':memory:');
 const engine = new BehavioralSequenceEngine({
-  onEnforce: (decision) => {
+  onDecision: (decision) => {
     console.log(`[ENFORCEMENT ACTION] Level ${decision.threatLevel} -> ${decision.action}`);
     console.log(`[MOTIVO]: ${decision.reason}\n`);
     ledger.recordIncident(decision);
@@ -20,7 +20,7 @@ const engine = new BehavioralSequenceEngine({
 const nodeAppProfile = new WorkloadProfile({
   name: 'production-api',
   type: 'nodejs',
-  allowedBinaries: ['node'],
+  allowedBinaries: ['/usr/local/bin/node'],
   allowedDestinations: ['10.0.0.5:5432']
 });
 
@@ -29,6 +29,9 @@ engine.registerProfile('workload-prod-api', nodeAppProfile);
 console.log('1. Simulando tráfico benigno de producción...');
 engine.processEvent({
   workloadId: 'workload-prod-api',
+  hostId: 'lab-host',
+  bootId: 'lab-boot',
+  execId: 'exec-4001',
   pid: 4001,
   ppid: 1,
   eventType: EventType.PROCESS_EXEC,
@@ -38,6 +41,9 @@ engine.processEvent({
 
 engine.processEvent({
   workloadId: 'workload-prod-api',
+  hostId: 'lab-host',
+  bootId: 'lab-boot',
+  execId: 'exec-4001',
   pid: 4001,
   ppid: 1,
   eventType: EventType.FILE_READ,
@@ -51,6 +57,9 @@ console.log('2. Inyectando cadena de ataque simulada en subproceso...');
 // Paso A: Spawning de bash desde el proceso node
 engine.processEvent({
   workloadId: 'workload-prod-api',
+  hostId: 'lab-host',
+  bootId: 'lab-boot',
+  execId: 'exec-4002',
   pid: 4002,
   ppid: 4001,
   eventType: EventType.PROCESS_EXEC,
@@ -61,6 +70,9 @@ engine.processEvent({
 // Paso B: Intento de recolectar secretos del proceso
 engine.processEvent({
   workloadId: 'workload-prod-api',
+  hostId: 'lab-host',
+  bootId: 'lab-boot',
+  execId: 'exec-4002',
   pid: 4002,
   ppid: 4001,
   eventType: EventType.FILE_READ,
@@ -71,6 +83,9 @@ engine.processEvent({
 // Paso C: Intento de conectar hacia un host C2 desconocido
 engine.processEvent({
   workloadId: 'workload-prod-api',
+  hostId: 'lab-host',
+  bootId: 'lab-boot',
+  execId: 'exec-4002',
   pid: 4002,
   ppid: 4001,
   eventType: EventType.NETWORK_CONNECT,
