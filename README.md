@@ -10,7 +10,7 @@ Sentinel Runtime is an early-stage Linux runtime telemetry and evidence service.
 
 ## Architecture
 
-~~~mermaid
+```mermaid
 flowchart LR
   subgraph Host["Customer Linux host"]
     T["Tetragon eBPF sensor"]
@@ -27,13 +27,58 @@ flowchart LR
   C["Sentinel Cloud"]
   A["Local unprivileged attacker"] -. "cannot write a root-owned install" .-> R
   K["root / kernel compromise"] -. "outside the agent trust boundary" .-> T
-~~~
+```
 
 The proxy separates the collector from Tetragon’s administrative RPC surface and permits one active event stream for the collector. The collector is constrained by systemd, has no Linux capabilities, and writes only to its private state directory. Both services have CPU, memory, task, and file-descriptor ceilings. The installation and configuration trees must be root-owned and non-writable by group or other users. The local SQLite chain detects some edits when verified; it is not immutable against a host administrator.
 
+## Repository semantic map
+
+```mermaid
+flowchart TB
+  CLI["bin/sentinel-runtime.js<br/>CLI entrypoint"]
+  subgraph Ingest["Ingestion"]
+    COL["src/collectors<br/>Tetragon gRPC and JSONL"]
+    ADP["src/adapters<br/>provider field mapping"]
+  end
+  subgraph Contract["Contract boundary"]
+    SCH["schemas/<br/>Event Contract v2"]
+    VAL["src/contracts<br/>validate and materialize"]
+  end
+  subgraph Detection["Detection"]
+    ENG["src/engine.js<br/>process and sequence correlation"]
+    INT["src/intelligence/<br/>behavior and anomaly rules"]
+    PROF["src/profiling/<br/>workload profiles"]
+  end
+  subgraph Evidence["Evidence and egress"]
+    EVD["src/evidence.js<br/>SQLite hash-chain ledger"]
+    CLOUD["src/cloud/<br/>heartbeats and incident receipts"]
+  end
+  subgraph Operations["Operations"]
+    PKG["packaging/<br/>systemd and Tetragon policy"]
+    CI[".github/workflows/ci.yml"]
+  end
+  TEST["test/ and labs/<br/>unit, integration, and lab demos"]
+  DOCS["docs/<br/>status, threat model, specs"]
+  CLI --> COL
+  COL --> ADP
+  ADP --> VAL
+  SCH --> VAL
+  VAL --> ENG
+  PROF --> ENG
+  INT --> ENG
+  ENG --> EVD
+  EVD --> CLOUD
+  PKG --> CLI
+  CI --> TEST
+  TEST --> ENG
+  DOCS -.-> CLI
+```
+
+This map shows where each responsibility lives in the repository. It is a navigation aid, not a runtime trust boundary.
+
 ## Event flow
 
-~~~mermaid
+```mermaid
 flowchart TD
   G["Tetragon gRPC GetEvents<br/>core events + exact policy names"] --> F{"Frame valid and<br/>within 16 MiB?"}
   F -->|no| X["Record explicit rejection,<br/>unsupported family, or transport error"]
@@ -49,7 +94,7 @@ flowchart TD
   L --> O["Optional bounded Cloud<br/>incident receipt"]
   H --> O
   Q["Queue or sensor loss"] --> H
-~~~
+```
 
 The collector requests core process events by default and adds policy-generated families only for exact `--tetragon-policy-name` values. Events that cannot be validated are recorded as rejections or unsupported records rather than silently treated as valid. This diagram describes the implemented path; it is not a claim that every generated event is captured or that Event Contract v2 is frozen.
 
@@ -68,7 +113,7 @@ The collector requests core process events by default and adds policy-generated 
 
 ## Self-protection: controls and limits
 
-~~~mermaid
+```mermaid
 flowchart TD
   E["Tetragon event stream"] --> Q["Bounded queue"]
   Q -->|capacity exceeded| D["Record loss / mark observability DEGRADED"]
@@ -79,7 +124,7 @@ flowchart TD
   SD --> RESUME["Reconnect to Tetragon; record stream gap as UNKNOWN"]
   ROOT["root or kernel attacker"] --> LIMIT["Can still stop/replace the agent, sensor, key, or local ledger"]
   LIMIT --> EXT["Requires an independent external heartbeat and evidence anchor"]
-~~~
+```
 
 | Threat | Current control | What it does not prove |
 |---|---|---|
@@ -93,7 +138,7 @@ flowchart TD
 
 ## Response path (observe-only)
 
-~~~mermaid
+```mermaid
 flowchart LR
   DET["Local detection or signal"] --> REC["Record evidence<br/>in local ledger"]
   REC --> DEC{"Bounded incident<br/>receipt warranted?"}
@@ -104,7 +149,7 @@ flowchart LR
   KEEP --> HUMAN
   CLOUD -. "no inbound task channel<br/>in this release" .-> R["Runtime"]
   HUMAN -. "containment is external;<br/>not performed by Runtime" .-> HOST["Host"]
-~~~
+```
 
 Runtime only preserves and reports. This release exposes no Cloud-to-host task channel and does not kill, isolate, block, or retaliate against an attacker. Any containment decision belongs to an independently authorized response system.
 
@@ -126,12 +171,12 @@ These are observations from one WSL2 laboratory, not a production certification 
 
 Requirements: Linux for live Tetragon collection, Node.js 22.5 or later, and Tetragon v1.8.0. For the systemd setup, follow [Linux deployment](docs/DEPLOYMENT_SYSTEMD.md). Packaging notes are in [the systemd directory](packaging/systemd/README.md).
 
-~~~sh
+```sh
 npm ci
 npm test
 node bin/sentinel-runtime.js status
 node bin/sentinel-runtime.js verify-ledger --db /var/lib/sentinel-runtime/runtime.sqlite
-~~~
+```
 
 For the explicitly bounded local resilience exercise, see its guide and the guarded runner in scripts/manual. Do not run it on a production host.
 
