@@ -19,7 +19,8 @@
 
 ## Validated in this review
 
-- Full Node test suite on Windows under the required runtime guard: 304 total, 299 passed, 5 skipped, 0 failed. Skips are Linux-only process metadata (2), private-key permissions (1), and proxy integration (2). Focused Linux collector, Cloud client, and proxy suites passed 29/29 in WSL2.
+- Full Node test suite on the published `master` tree, Windows under the required runtime guard: 281 total, 278 passed, 3 Linux-only skips, 0 failed.
+- Focused WSL2 collector, Cloud client, and proxy suites on the published tree: 26/26 passed, including live Unix-socket stream-limit coverage.
 - Focused adapter/materializer/schema/engine regression suites passed after raw relative-path support was added.
 - Local WSL2 service recovery: a controlled SIGKILL of the Runtime process was followed by a systemd restart and a valid local ledger check across 6,877 records.
 - Local WSL2 permissions: the active install tree was found world-writable, corrected, and then confirmed non-writable by the sentinel-runtime account. A temporary 203/EXEC failure during mode normalization was corrected; details are in the [lab report](labs/SR-RT-001-LOCAL-RESILIENCE.md).
