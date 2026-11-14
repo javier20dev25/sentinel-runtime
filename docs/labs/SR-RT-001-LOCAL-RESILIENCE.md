@@ -44,7 +44,9 @@ A first blanket permission normalization also removed execute permission from th
 
 ## Regression found and corrected in source
 
-The live run produced 88 rejected FILE_OPEN_RESULT records because the materializer required an absolute pathname. Linux openat2 accepts relative operands interpreted with dirfd. The Event Contract v2 candidate on the feature branch (not the published `master` build used below) now retains the raw path, path_form (ABSOLUTE, RELATIVE, EMPTY), and dirfd without fabricating an absolute path. Runtime marks unresolved relative paths for review and does not learn or correlate them as confirmed sensitive-path access. Unit and contract tests cover this mapping. A new live sensor run with the updated feature-branch build is still required to verify those records end to end; the published `master` build still rejects relative open-result paths.
+Live runs produced rejected FILE_OPEN_RESULT records because the materializer required an absolute pathname: 88 in the first run and 123 in a later follow-up window. Linux openat2 accepts relative operands interpreted with dirfd. The Event Contract v2 candidate on the feature branch (not the published `master` build used below) now retains the raw path, path_form (ABSOLUTE, RELATIVE, EMPTY), and dirfd without fabricating an absolute path. Runtime marks unresolved relative paths for review and does not learn or correlate them as confirmed sensitive-path access. Unit and contract tests cover this mapping.
+
+A 2026-11-14 live run of that feature-branch build against the direct Tetragon socket processed 360 FILE_OPEN_RESULT records with `rejected: 0`. Eight records carried relative operands (for example `probe.txt` and `./probe.txt`) and were persisted with `path_form: RELATIVE`; 352 absolute paths were persisted as `ABSOLUTE`. The same run captured five marked executions after `STREAM_CONNECTED`, with 20 `PROCESS_EXEC` records in total. The published `master` build still rejects relative open-result paths; the correction must be ported and independently validated before deployment.
 
 ## Reproduction
 
@@ -58,7 +60,7 @@ After a run, compare Tetragon counters before/after, inspect Runtime EVENT_LOSS 
 - No proof of external connectivity or data exfiltration was attempted; all network traffic stayed on loopback.
 - The tests did not attempt kernel compromise, BPF program tampering, credential theft, or destructive containment.
 - The local ledger has no external anchor, and local disk retention is not bounded.
-- Repeat the lab after deploying the relative-path correction and require exact event/PID matching before calling the deception test detected.
+- Port and deploy the relative-path correction to the published build, then repeat the lab and require exact event/PID and `path_form` matching before calling the deception test detected.
 
 ## Follow-up — 2026-11-14: stream abuse and shutdown under load
 
@@ -101,4 +103,4 @@ The remaining execution-coverage gate is therefore the documented live-only cove
 
 ### Security behavior and remaining boundary
 
-These changes make local stream multiplication and resource exhaustion harder, and make shutdown loss visible. Runtime's current response remains defensive and non-retaliatory: preserve available evidence, report degraded coverage, reconnect under systemd, and submit only fixed, bounded read-only investigation tasks when configured. It does not execute arbitrary attacker commands, kill the suspected process, isolate networking, or “attack back.” A root or kernel-level attacker can still stop/replace Runtime, Tetragon, their configuration, and local evidence; independent remote health monitoring and evidence custody are needed to detect that boundary being crossed.
+These changes make local stream multiplication and resource exhaustion harder, and make shutdown loss visible. Runtime's current response remains defensive and non-retaliatory: preserve available evidence, report degraded coverage, and reconnect under systemd. The published `master` build has no inbound Cloud-to-host task channel; the unpublished feature branch adds fixed, bounded read-only investigation tasks only when explicitly enabled. Neither build executes arbitrary attacker commands, kills the suspected process, isolates networking, or “attack back.” A root or kernel-level attacker can still stop/replace Runtime, Tetragon, their configuration, and local evidence; independent remote health monitoring and evidence custody are needed to detect that boundary being crossed.

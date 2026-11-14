@@ -6,7 +6,7 @@ This guide details all environment variables, CLI runtime options, security flag
 
 ## 1. Environment Variables
 
-Sentinel Runtime is designed to operate 100% autonomously and air-gapped without external dependencies. Optional environment variables configure cloud fleet intelligence and default database locations.
+Sentinel Runtime is designed to operate autonomously without mandatory cloud connectivity, including air-gapped deployments. Optional environment variables configure cloud fleet intelligence and default database locations.
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
@@ -83,17 +83,19 @@ When `--intelligence` is enabled, the runtime pipeline enforces the following st
 5. **Human Approval Gate for Suspension (R2)**:
    Statistical rate anomalies alone cannot trigger process suspension. R2 recommendations require human operator authorization.
 
+The published collector does not wire a containment dispatcher. The decision and containment classes are library building blocks; the shipped service remains observe-only unless a future release adds an explicitly authorized containment path.
+
 ---
 
 ## 5. Systemd Deployment Architecture
 
 For Linux host deployments, two decoupled service units are provided in [`docs/DEPLOYMENT_SYSTEMD.md`](DEPLOYMENT_SYSTEMD.md):
 
-1. **`sentinel-tetragon-gateway.service`**:
-   - Runs as a constrained gateway process.
-   - Connects to privileged Tetragon socket (`/var/run/tetragon/tetragon.sock`).
+1. **`sentinel-runtime-proxy.service`**:
+   - Runs as a constrained gateway process under `sentinel-tetragon-proxy`.
+   - Connects to the site-specific upstream Tetragon socket (for example `/var/run/tetragon/tetragon.sock`).
    - Exposes a restricted, read-only Unix socket (`/run/sentinel-runtime/tetragon-readonly.sock`) exposing only `GetVersion` and `GetEvents`.
-   - Socket ownership: `sentinel-gateway:sentinel-runtime`, permissions `0660`.
+   - Socket ownership: `sentinel-tetragon-proxy:sentinel-runtime`, permissions `0660`.
 2. **`sentinel-runtime.service`**:
    - Runs as an unprivileged service account (`sentinel-runtime`).
    - Connects only to the read-only proxy socket.
@@ -134,7 +136,7 @@ node bin/sentinel-runtime.js collect-tetragon \
 
 - **Connection Direction:** **Strictly Outbound Only.** Sentinel Cloud never connects inbound to client servers (no open SSH ports, no inbound gRPC). Sentinel Runtime establishes an outbound HTTPS connection to Sentinel Cloud.
 - **Credential Scoping:** Each node must be provisioned with an individual, node-specific Agent Key (`snt_rt_<tenant>_<node_uuid>`), generated via an Enrollment Token. **Never share a single static API key across multiple production nodes.** If one node is compromised, its key can be revoked independently without affecting the rest of the fleet.
-- **Process Isolation:** Deploy as decoupled systemd services (`sentinel-tetragon-gateway` running under restricted permissions and `sentinel-runtime` under an unprivileged user `sentinel-runtime`).
+- **Process Isolation:** Deploy as decoupled systemd services (`sentinel-runtime-proxy` running under restricted permissions and `sentinel-runtime` under an unprivileged user `sentinel-runtime`).
 - **Data Privacy & Redaction:** Keep `--capture-process-arguments=false` (default) to avoid leaking sensitive command-line secrets (passwords, tokens). Environment variables and file payloads are never ingested.
 - **Resilience Under Disconnect:** If Sentinel Cloud is unreachable, Sentinel Runtime continues operating locally: buffering events in its SQLite ledger and evaluating detections without dropping kernel events or blocking workloads. Upon reconnection, pending health records and detection summaries are dispatched.
 

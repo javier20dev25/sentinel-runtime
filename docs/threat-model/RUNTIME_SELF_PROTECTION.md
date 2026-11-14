@@ -46,12 +46,13 @@ The local ledger verifies a SHA-256 record chain. This detects many accidental o
 The separate [SR-RT-001 lab report](../labs/SR-RT-001-LOCAL-RESILIENCE.md) records the 2026-11-13 and 2026-11-14 WSL2 tests. The material observations are:
 
 - A bounded event-flood workload increased Tetragon observer-overflow and queue-loss counters. Runtime wrote EVENT_LOSS records and marked observability degraded.
-- The lab did not find reliable event-key/PID matches for every synthetic child process. Do not state that the attack sequence was fully detected.
+- The flood run did not find reliable event-key/PID matches for every synthetic child process, so do not state that the attack sequence was fully detected. A later controlled run that waited for `STREAM_CONNECTED` matched five marked executions; the earlier mismatch is attributed to test sequencing.
 - After a controlled SIGKILL of the Runtime main process, systemd restarted it and the local ledger verified valid. The post-restart Cloud heartbeat timed out in that run.
 - The active install tree was found world-writable and corrected to root-owned, non-writable permissions. That exposed a real deployment weakness. The deployment guide now requires a permission audit.
 - The live proxy test verifies that a second event subscription receives `RESOURCE_EXHAUSTED` and that cancellation releases the single stream slot. The active WSL2 systemd units reported the configured memory, CPU, task, descriptor, and OOM limits; this does not certify enforcement on other distributions.
 - Under a bounded 5,000-read / 16-child lab load, the updated collector stopped cleanly in about 11 seconds, recorded 158 queued events and 104,553 bytes as a discard lower bound, and marked the stream gap degraded/unknown. This is explicit loss accounting, not complete telemetry recovery.
-- A separate benign shell invocation with a reported process name that differed from its executable did not increment Runtime's execution-event ledger count (564 records, max sequence 21,508 before and after). Tetragon's exporter contained cumulative execution samples, but they could not be attributed to this invocation. This is an unresolved sensor-to-Runtime reconciliation gap and blocks claims of complete execution visibility or process-name spoof detection.
+- A follow-up on the published `master` build waited for `STREAM_CONNECTED` before starting five marked executions with a deceptive `argv[0]`. The ledger captured those children (PIDs 11717-11721) and 13 `PROCESS_EXEC` records in the window, with `rejected: 0` and a shutdown-loss lower bound of 2 events (1,976 bytes). This resolves the earlier sensor-to-Runtime reconciliation discrepancy as test sequencing, but it does not prove capture before connection, exact argument boundaries, or complete execution visibility. `--capture-process-arguments` yields `RAW_STRING_ONLY` with `argv: null`.
+- The published `master` build rejects `FILE_OPEN_RESULT` records whose open operand is relative, because the materializer requires an absolute pathname. The unpublished feature branch adds `path_form` and `dirfd` handling and was verified live (8 relative records persisted with `path_form: RELATIVE`, `rejected: 0`). Relative-path open evidence must not be treated as covered on `master` until that correction is ported and revalidated.
 
 ## Response behavior
 
@@ -62,6 +63,6 @@ Runtime's current host response is **observe, record, degrade, and report**. The
 1. Add a supported installer/upgrade path that enforces root ownership and rejects writable installation trees.
 2. Add signed remote ledger checkpoints and explicit disk-retention/exhaustion handling.
 3. Add an independent heartbeat watchdog and validate Cloud behavior for process death and prolonged host isolation.
-4. Resolve the live execution-event collection gap; test capture completeness and loss thresholds on native supported Linux distributions, not only WSL2. The missing ledger record for the controlled process-name mismatch must be reproduced and explained before claiming complete execution visibility.
+4. Extend live execution validation beyond WSL2: prove capture completeness, argument fidelity, and loss thresholds on native supported Linux distributions. Port and validate the relative-path correction before relying on relative-path open evidence.
 5. Add supported policy provenance and sensor-policy drift checks; the current agent does not cryptographically attest loaded Tetragon policies.
 6. Before adding Cloud-to-host tasks, review authorization and data minimization with the Cloud service owner.

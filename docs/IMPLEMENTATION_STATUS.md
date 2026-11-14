@@ -10,7 +10,7 @@
 - Tetragon v1.8.0 gRPC collector with a core-event default and policy-name-scoped opt-in for probe event families, pinned protobuf definitions, bounded message sizes, bounded event/byte queue, event validation, and explicit stream-gap state.
 - JSONL ingestion with bounded frame size, UTF-8 validation, duplicate-key rejection, immutable-source fingerprinting, optional atomic resume checkpoints, and explicit unsupported-event records.
 - Supported Tetragon process lifecycle records and selected, explicitly labeled kprobe shapes. Incomplete or unsupported shapes are not guessed.
-- Event Contract v2 candidate materializer and validator. Native open hooks preserve raw absolute, relative, or empty pathname operands and dirfd. The candidate schema is not frozen.
+- Event Contract v2 candidate materializer and validator. The published `master` build requires absolute open-result paths and records relative or empty operands as contract rejections; an unpublished feature branch retains `path_form` (ABSOLUTE, RELATIVE, EMPTY) and `dirfd` without fabricating an absolute path. The candidate schema is not frozen.
 - Process correlation, allowlist checks, sequence detection, and rate anomaly signals. Profiles are operator-supplied; event names and rule labels alone do not prove malicious intent.
 - SQLite local evidence hash chain with verification. A privileged host administrator can rewrite the database and recompute a local chain.
 - Bounded Cloud incident outbox and optional outbound heartbeat/publishing. This release has no Cloud-to-host task interface.
@@ -19,14 +19,14 @@
 
 ## Validated in this review
 
-- Full Node test suite on the published `master` tree, Windows under the required runtime guard: 281 total, 278 passed, 3 Linux-only skips, 0 failed.
+- Full Node test suite on the published `master` tree, Windows under the required runtime guard: 283 total, 280 passed, 3 Linux-only skips, 0 failed.
 - Focused WSL2 collector, Cloud client, and proxy suites on the published tree: 26/26 passed, including live Unix-socket stream-limit coverage.
-- Focused adapter/materializer/schema/engine regression suites passed after raw relative-path support was added.
+- Focused adapter/materializer/schema/engine regression suites passed on the unpublished feature branch that adds raw relative-path support. The published `master` tree still rejects relative open-result paths.
 - Local WSL2 service recovery: a controlled SIGKILL of the Runtime process was followed by a systemd restart and a valid local ledger check across 6,877 records.
 - Local WSL2 permissions: the active install tree was found world-writable, corrected, and then confirmed non-writable by the sentinel-runtime account. A temporary 203/EXEC failure during mode normalization was corrected; details are in the [lab report](labs/SR-RT-001-LOCAL-RESILIENCE.md).
 - A bounded event-flood exercise increased Tetragon observer-overflow/queue-loss counters and Runtime recorded EVENT_LOSS. Exact matching of every generated child event was not established.
 - The updated proxy rejected a second live `GetEvents` subscription with `RESOURCE_EXHAUSTED` and accepted a replacement after cancellation. Under bounded load, the updated collector stopped cleanly in about 11 seconds, recorded a 158-event / 104,553-byte shutdown-queue discard lower bound, and restarted with observability degraded/unknown. Active WSL2 systemd units reported their configured resource ceilings.
-- A controlled benign `dash` execution with a deceptive `argv[0]` did not add a `PROCESS_EXEC` ledger record (564 records and maximum sequence 21,508 before and after). Exporter execution counters were cumulative and could not be mapped to this invocation; end-to-end execution capture remains unresolved.
+- A controlled benign execution with a deceptive `argv[0]` initially produced no matching `PROCESS_EXEC` record because the synthetic process ran before the collector’s live stream connected. A follow-up on the published `master` build waited for `STREAM_CONNECTED`, then captured five marked children (PIDs 11717-11721) and 13 `PROCESS_EXEC` records in the window. The collector reported `received 352`, `persisted 352`, `supported 341`, `unsupported 11`, `rejected 0`, with a shutdown-loss lower bound of 2 events (1,976 bytes). Remaining limits are the live-only coverage window, raw-string argument capture (`argv: null`), and host-wide sensor-loss counters that cannot be attributed per test.
 - Cloud heartbeat after process restart timed out in that run. Cloud-side heartbeat recovery is not validated.
 
 ## Not implemented or not proven
@@ -45,7 +45,7 @@
 
 1. Enforce root-owned non-writable installation modes through a supported installer and upgrade path.
 2. Validate systemd sandbox behavior on supported native Linux distributions.
-3. Resolve the reproducible `PROCESS_EXEC` sensor-to-ledger gap; then repeat overload/deception testing and prove exact event-to-lab-process matches, latency, and loss accounting.
+3. Resolve the remaining execution-visibility gates: live-only coverage, argument-capture fidelity, and measured sensor loss; port and validate the relative-path correction.
 4. Define ledger retention, disk-exhaustion behavior, signed external checkpoints, and Cloud stale-agent alerting.
 5. Complete independent Event Contract v2 review and freeze only after producer conformance.
 6. Before adding any Cloud-to-host task interface, review authorization, privacy, and tenant scoping with the Cloud service owner.
