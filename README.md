@@ -39,7 +39,7 @@ The proxy separates the collector from Tetragon’s administrative RPC surface a
 - Read-only proxy limits all clients to one active Tetragon event stream and eight concurrent gRPC streams per client connection; the systemd templates bound service CPU, memory, tasks, and open files.
 - Process correlation, deterministic profile checks, sequence rules, and statistical anomaly signals. A finding is an observation or hypothesis, not proof that a file was read, a connection succeeded, or data left the host.
 - SQLite evidence ledger with local SHA-256 hash chaining and a verifier.
-- Optional Cloud heartbeats and incident receipts. Optional Cloud investigation dispatch accepts a fixed, read-only L0 playbook allowlist; it does not run arbitrary shell commands or take host response actions.
+- Optional outbound Cloud heartbeats and incident receipts. This release has no Cloud-to-host task channel.
 - Linux systemd templates for separate collector and read-only Tetragon proxy accounts.
 
 ## Self-protection: controls and limits
@@ -64,7 +64,7 @@ flowchart TD
 | Event flood / large frame / resource exhaustion | 16 MiB gRPC message limit; bounded event queue; systemd CPU, memory, task, and file limits; loss makes coverage degraded | It cannot recover events Tetragon already dropped; hitting the hard memory limit can restart the service |
 | Cloud outage / incident burst | Bounded outbox with local ledger as primary record | Local disk usage is not capped; retention and anchoring remain operator work |
 | Runtime process crash or SIGKILL | systemd restart policy | It cannot report its own death while stopped; Cloud needs a stale-heartbeat monitor |
-| Malicious Cloud task | Fixed L0 read-only playbooks, scope checked against local evidence, strict time/output limits, no shell | A valid host token authenticates the client, not the host kernel or Runtime binary |
+| Compromised Cloud account | Runtime exposes no inbound Cloud-to-host task channel in this release | The host token authenticates outbound Runtime requests; it does not attest the host kernel or Runtime binary |
 | Root/kernel compromise | No in-agent prevention claim | Root can alter Tetragon, Runtime, keys, service units, and local evidence |
 
 The current service template is observe-only. Runtime does not “attack back.” Its defensive response is to preserve evidence, expose loss and health state, request bounded read-only inspection where enabled, and leave containment decisions to an independently authorized response system.
@@ -84,7 +84,7 @@ These are observations from one WSL2 laboratory, not a production certification 
 
 ## Run and inspect
 
-Requirements: Linux for live Tetragon collection, Node.js 22.5 or later, and Tetragon v1.8.0. For the systemd setup, follow [Linux deployment](docs/DEPLOYMENT_SYSTEMD.md). Read-only investigation task details and permissions are in [the Linux deployment and host investigation guide](packaging/systemd/README.md).
+Requirements: Linux for live Tetragon collection, Node.js 22.5 or later, and Tetragon v1.8.0. For the systemd setup, follow [Linux deployment](docs/DEPLOYMENT_SYSTEMD.md). Packaging notes are in [the systemd directory](packaging/systemd/README.md).
 
 ~~~sh
 npm ci
@@ -102,7 +102,7 @@ For the explicitly bounded local resilience exercise, see its guide and the guar
 | Current code and validation status | [Implementation status](docs/IMPLEMENTATION_STATUS.md) |
 | Security boundary and self-protection | [Runtime self-protection threat model](docs/threat-model/RUNTIME_SELF_PROTECTION.md) |
 | Linux installation, permissions, systemd | [Deployment guide](docs/DEPLOYMENT_SYSTEMD.md) |
-| Cloud investigation task scope | [Host investigation guide](packaging/systemd/README.md) |
+| Systemd unit packaging | [Packaging notes](packaging/systemd/README.md) |
 | Specifications, reports, and operational docs | [Documentation index](docs/README.md) |
 | Event source mappings | [Tetragon v1.8.0 field mapping](docs/specs/TETRAGON_V1_8_0_FIELD_MAPPING.md) |
 | Local resilience exercise | [SR-RT-001 lab report](docs/labs/SR-RT-001-LOCAL-RESILIENCE.md) |

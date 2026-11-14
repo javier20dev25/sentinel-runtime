@@ -2,7 +2,7 @@
 
 **Status:** current implementation boundary and lab review
 **Review date:** 2026-11-14
-**Scope:** local Linux Runtime process, Tetragon proxy boundary, event pipeline, host-installed files, Cloud investigation task client
+**Scope:** local Linux Runtime process, Tetragon proxy boundary, event pipeline, host-installed files, outbound Cloud heartbeat and incident receipt client
 
 ## Security objective
 
@@ -17,7 +17,7 @@ Runtime is not a kernel reference monitor. It cannot protect itself from root, a
 | Unprivileged local account | Run collector as dedicated non-root user; no Linux capabilities; systemd NoNewPrivileges and strict filesystem view; installation/configuration must be root-owned and non-writable by group/other | WSL2 lab found the active install tree at 0777. It was corrected; the service account then failed write checks for the install directory and Runtime code. The permission check is an operator/deployment control, not a Runtime tamper detector. |
 | Abuse of collector-to-Tetragon connection or local socket | Separate proxy process/account; downstream gRPC surface registers only GetVersion and GetEvents; one active GetEvents stream; eight concurrent gRPC streams maximum | The proxy still has the site-specific upstream socket access needed to read from Tetragon. A proxy compromise inherits that access. |
 | Flood supported event stream | gRPC messages capped at 16 MiB; collector event and byte queues are bounded; the default queue is 512 events / 64 MiB; collector and proxy have systemd CPU/memory/task/file limits; loss is surfaced as degraded observability; Cloud incident outbox is bounded to 1,024 items / 32 MiB | Tetragon may drop events before Runtime sees them. A cgroup memory limit can restart the service. The local SQLite ledger itself has no built-in retention or disk quota. |
-| Malicious or compromised Cloud task issuer | Cloud tasks are schema-bounded and limited to four per poll; Runtime supports a fixed L0 read-only playbook list, checks scope against same-boot local evidence, enforces time/output caps, and never invokes shell or arbitrary subprocesses | A host token authenticates an API client; it does not attest the host, kernel, installed binary, or local ledger to Cloud. Read-only host metadata can still be sensitive. |
+| Compromised Cloud account | Runtime exposes no inbound Cloud-to-host task channel in this release | The host token authenticates outbound Runtime requests; it does not attest the host, kernel, installed binary, or local ledger to Cloud. |
 | Kill or crash the Runtime process | systemd Restart=on-failure restarts unexpected process failure; collector records a new stream epoch and marks the prior stream gap unknown | A process cannot report its own SIGKILL. Runtime has no independent local watchdog or signed health anchor. Cloud must independently alert on stale heartbeat. |
 | Root or kernel compromise | Report measured loss and local ledger verification results; use OS service isolation to reduce attack surface | Root can stop or replace Runtime, alter systemd and Tetragon configuration, read host credentials, tamper with the kernel, or rewrite the local hash chain. External anchoring and separate control plane are required. |
 
@@ -33,9 +33,9 @@ At install time, /opt/sentinel-runtime and /etc/sentinel-runtime must be root-ow
 
 The gRPC client caps individual messages at 16 MiB. Collector event and byte queues are bounded. Queue overflow is counted and transitions observability to degraded; a degraded Runtime must not claim complete coverage. Cloud delivery uses a separate bounded outbox so network failure cannot grow that queue without limit. SQLite remains the durable local evidence store, not a retention policy.
 
-### Read-only investigation task boundary
+### Cloud channel boundary
 
-Cloud investigation tasks have a fixed playbook identifier, a bounded scope, expiration, timeout, and output size. PID-bound tasks must match the host boot ID and evidence already present in the local ledger. Runtime does not use shell command strings, execute arbitrary programs, read environment variables, collect file or packet contents, or perform L1+ containment through this task channel. The result is still agent-reported evidence.
+In this master release, Runtime sends heartbeats and incident receipts to Cloud. No Cloud-to-host task channel is shipped, so Cloud cannot use Runtime to request host inspection or response actions. The outbound client does not attest the kernel or Runtime binary; receipts remain agent-reported evidence.
 
 ### Evidence and recovery
 
@@ -55,7 +55,7 @@ The separate [SR-RT-001 lab report](../labs/SR-RT-001-LOCAL-RESILIENCE.md) recor
 
 ## Response behavior
 
-Runtime's current host response is **observe, record, degrade, and report**. The systemd manager may restart a crashed process. Cloud can request only registered read-only investigations when that feature is enabled. Runtime does not kill, isolate, block, or counterattack an adversary. Any future enforcement must be a separate, explicitly authorized, independently tested capability.
+Runtime's current host response is **observe, record, degrade, and report**. The systemd manager may restart a crashed process. This master release only publishes heartbeats and incident receipts; it has no inbound task interface. Runtime does not kill, isolate, block, or counterattack an adversary. Any future enforcement must be a separate, explicitly authorized, independently tested capability.
 
 ## Remaining security gates
 
@@ -64,4 +64,4 @@ Runtime's current host response is **observe, record, degrade, and report**. The
 3. Add an independent heartbeat watchdog and validate Cloud behavior for process death and prolonged host isolation.
 4. Resolve the live execution-event collection gap; test capture completeness and loss thresholds on native supported Linux distributions, not only WSL2. The missing ledger record for the controlled process-name mismatch must be reproduced and explained before claiming complete execution visibility.
 5. Add supported policy provenance and sensor-policy drift checks; the current agent does not cryptographically attest loaded Tetragon policies.
-6. Review Cloud task authorization and data minimization with the Cloud service owner before production enablement.
+6. Before adding Cloud-to-host tasks, review authorization and data minimization with the Cloud service owner.

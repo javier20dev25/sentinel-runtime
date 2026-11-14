@@ -8,7 +8,7 @@ This index separates documents that describe shipped behavior from designs and h
 - [Linux systemd deployment](DEPLOYMENT_SYSTEMD.md): installation paths, account separation, file permissions, sandboxing, and residual risks.
 - [Runtime self-protection threat model](threat-model/RUNTIME_SELF_PROTECTION.md): attacker capabilities, implemented controls, validation, and trust limits.
 - [Runtime lab report](labs/SR-RT-001-LOCAL-RESILIENCE.md): bounded WSL2 test procedure and observed output boundaries.
-- [Cloud host investigation tasks](../packaging/systemd/README.md): the fixed L0 read-only playbook interface and its required Linux permissions.
+- [Systemd packaging notes](../packaging/systemd/README.md): unit files and Linux packaging details.
 - [Configuration guide](CONFIGURATION.md): supported environment variables and CLI settings.
 
 ## Normative or candidate specifications

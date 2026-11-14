@@ -13,7 +13,7 @@
 - Event Contract v2 candidate materializer and validator. Native open hooks preserve raw absolute, relative, or empty pathname operands and dirfd. The candidate schema is not frozen.
 - Process correlation, allowlist checks, sequence detection, and rate anomaly signals. Profiles are operator-supplied; event names and rule labels alone do not prove malicious intent.
 - SQLite local evidence hash chain with verification. A privileged host administrator can rewrite the database and recompute a local chain.
-- Bounded Cloud incident outbox, optional outbound heartbeat/publishing, and a fixed L0 read-only investigation task interface. Task execution does not use shell or arbitrary commands.
+- Bounded Cloud incident outbox and optional outbound heartbeat/publishing. This release has no Cloud-to-host task interface.
 - Linux systemd unit templates that separate the collector from a read-only Tetragon proxy. The collector has no Linux capabilities and writes only to its state directory under the unit’s filesystem view.
 - SQLite temporary-path configuration needed under ProtectSystem=strict.
 
@@ -47,7 +47,7 @@
 3. Resolve the reproducible `PROCESS_EXEC` sensor-to-ledger gap; then repeat overload/deception testing and prove exact event-to-lab-process matches, latency, and loss accounting.
 4. Define ledger retention, disk-exhaustion behavior, signed external checkpoints, and Cloud stale-agent alerting.
 5. Complete independent Event Contract v2 review and freeze only after producer conformance.
-6. Review read-only task authorization, privacy, and tenant scoping with the Cloud service owner.
+6. Before adding any Cloud-to-host task interface, review authorization, privacy, and tenant scoping with the Cloud service owner.
 7. Keep host enforcement disabled until separate policy authorization, rollback, and failure-mode reviews pass.
 
 See [Runtime self-protection threat model](threat-model/RUNTIME_SELF_PROTECTION.md), [Linux deployment](DEPLOYMENT_SYSTEMD.md), and [documentation index](README.md).
