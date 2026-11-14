@@ -12,6 +12,29 @@ Sentinel Runtime provides deterministic runtime behavioral correlation, complex 
 
 The engine operates by default in **observe-only** mode (R1) with strict attribution gates. Active containment (R2–R4) requires explicit opt-in policy authorization and verified process lineage.
 
+## Runtime architecture
+
+```mermaid
+flowchart LR
+  subgraph Host["Customer Linux host"]
+    T["Cilium Tetragon<br/>eBPF sensor"]
+    P["Read-only gRPC proxy<br/>GetVersion + GetEvents"]
+    R["Sentinel Runtime<br/>collector and normalizer"]
+    V["Event Contract v2<br/>validation and materialization"]
+    E["Behavior engine<br/>process correlation + CEP"]
+    L[("SQLite hash-chain ledger")]
+    H["Health and loss metrics"]
+    T --> P --> R --> V --> E --> L
+    V --> H
+    R -->|"optional outbound HTTPS"| C
+    L -->|"bounded incident receipts"| C
+  end
+  C["Sentinel Cloud"]
+  A["Local unprivileged attacker"] -. "cannot write a root-owned install" .-> R
+  K["root / kernel compromise"] -. "outside the agent trust boundary" .-> T
+```
+
+The proxy separates the collector from Tetragon's administrative RPC surface. The collector is constrained by systemd, has no Linux capabilities, and writes only to its private state directory. The installation and configuration trees must be root-owned and non-writable by group or other users.
 
 ## Architectural Comparison: Sentinel Runtime vs. Cilium Tetragon, Falco & Sysdig
 
@@ -51,6 +74,28 @@ When evaluating runtime security tools for Linux and Kubernetes environments, te
   - Automated Decision Engine (`DecisionEngine`) scoring threats, computing decision confidence, and orchestrating policy-authorized containment actions.
 - Containment & Response Dispatcher (`ContainmentDispatcher`) supporting graduated containment levels (R1 Observe Only, R2 Process Suspension via `SIGSTOP`, R3 Process Termination via `SIGKILL`, R4 Container/Network Isolation) with strict transactional pre-commitment (`ACTION_PLANNED` committed to the SQLite hash chain prior to signal dispatch) and strict attribution gates that prevent destructive actions against Profile D or unverified identities.
 - Cryptographic chain custody and forensic bundle export (`export-custody`, `verify-custody`) with immutable SHA-256 / HMAC manifests for external audit and incident response.
+
+## Event flow
+
+```mermaid
+flowchart TD
+  G["Tetragon gRPC GetEvents<br/>or JSONL export"] --> F{"Frame valid and<br/>within 16 MiB?"}
+  F -->|no| X["Record rejection,<br/>unsupported family, or transport error"]
+  F -->|yes| P["Preserve provider provenance<br/>raw hash and source time"]
+  P --> N["Normalize supported event shape"]
+  N --> C{"Event Contract v2<br/>candidate valid?"}
+  C -->|no| R["Record rejection;<br/>do not persist as a valid event"]
+  C -->|yes| M["Materialize event with<br/>host + boot + exec identity"]
+  M --> B["Bounded behavior correlation<br/>profiles, sequences, anomalies"]
+  B --> D["Decision or observation signal"]
+  D --> L[("SQLite hash-chain ledger")]
+  L --> H["Health, loss, and<br/>stream-gap state"]
+  L --> O["Optional bounded Cloud<br/>incident receipt"]
+  H --> O
+  Q["Queue or sensor loss"] --> H
+```
+
+Events that cannot be validated are recorded as rejections or unsupported records rather than silently treated as valid. This diagram describes the implemented path; it is not a claim that every generated event is captured or that Event Contract v2 is frozen.
 
 ## Explicit product limits
 
@@ -244,23 +289,63 @@ engine.registerProfile('payments-api', new WorkloadProfile({
 
 Treat profiles as security policy: generate them from trusted deployment manifests and pin binary digests where practical. Path matching is lexical because a remote sensor path cannot be resolved with the collector's filesystem; it does not certify symlink targets.
 
-## Repository map
+## Repository semantic map
 
-```text
-bin/sentinel-runtime.js          CLI
-src/engine.js                    bounded deterministic correlation
-src/profiler.js                  workload baseline rules
-src/evidence.js                  local SQLite evidence hash chain
-src/ingest/jsonl.js               bounded JSONL framer and duplicate-key scanner
-src/adapters/tetragon-json.js    Tetragon JSON adapter (exec/exit and selected kprobes)
-src/contracts/materialize-tetragon-v2.js  Native Tetragon-to-v2 mapping and validation
-src/contracts/                   v1/v2 validators, materializer, and event-key profiles
-schemas/                         event contract schemas
-test/                            contract, integration, and hardening tests
-scripts/manual/                  explicit live sensor checks and fixture generation; never auto-run as tests
-docs/specs/                      provenance, L3 reports (see L3_F5_R1_CORRECTION_REPORT.md), and architecture
-docs/IMPLEMENTATION_STATUS.md    implemented scope and production gates
+```mermaid
+flowchart TB
+  CLI["bin/sentinel-runtime.js<br/>CLI entrypoint"]
+  subgraph Ingest["Ingestion"]
+    COL["src/collectors<br/>Tetragon gRPC"]
+    JSONL["src/ingest/jsonl.js<br/>bounded JSONL framing"]
+    ADP["src/adapters<br/>Tetragon field mapping"]
+  end
+  subgraph Contract["Contract boundary"]
+    SCH["schemas/<br/>Event Contract v1 and v2"]
+    VAL["src/contracts/<br/>validation and materialization"]
+  end
+  subgraph Detection["Detection"]
+    ENG["src/engine.js<br/>process correlation"]
+    INT["src/intelligence/<br/>CEP, anomaly, and behavior rules"]
+    PROF["src/profiler.js<br/>workload profiles"]
+  end
+  subgraph Response["Response"]
+    DEC["Decision engine<br/>threat scoring and confidence"]
+    CONT["src/containment/<br/>containment dispatcher"]
+  end
+  subgraph Evidence["Evidence and egress"]
+    EVD["src/evidence.js<br/>SQLite hash chain"]
+    CUST["src/custody/<br/>forensic export"]
+    CLOUD["src/cloud/<br/>heartbeats and incidents"]
+  end
+  subgraph Ops["Operations"]
+    PKG["packaging/<br/>systemd and Tetragon policy"]
+    BENCH["bench/<br/>bounded benchmarks"]
+    TEST["test/ and labs/<br/>tests and demos"]
+    MANUAL["scripts/manual/<br/>explicit live sensor checks"]
+    DOCS["docs/<br/>status, threat model, specs"]
+  end
+  CLI --> COL
+  CLI --> JSONL
+  COL --> ADP
+  JSONL --> ADP
+  ADP --> VAL
+  SCH --> VAL
+  VAL --> ENG
+  PROF --> ENG
+  INT --> ENG
+  ENG --> DEC
+  DEC --> CONT
+  ENG --> EVD
+  EVD --> CUST
+  EVD --> CLOUD
+  PKG --> CLI
+  TEST --> ENG
+  BENCH --> TEST
+  MANUAL -.-> TEST
+  DOCS -.-> CLI
 ```
+
+This map shows where each responsibility lives in the repository. It is a navigation aid, not a runtime trust boundary.
 
 ## Sentinel Cloud integration & fleet security architecture
 
@@ -273,28 +358,28 @@ Sentinel Runtime integrates with **Sentinel Cloud** as an autonomous host agent 
 
 The connection between customer infrastructure and Sentinel Cloud is strictly **outbound**:
 
-```text
-Customer Workload Node (Linux / K8s)
-┌──────────────────────────────────────────────┐
-│ Kernel eBPF (Cilium Tetragon v1.8.0)         │
-│   │                                          │
-│   ▼                                          │
-│ Sentinel Runtime                             │
-│   ├─ Materializer & Validator (Contract v2)  │
-│   ├─ Real-Time Intelligence Engine (FSM/CEP) │
-│   ├─ Local Cryptographic SQLite Ledger       │
-│   └─ Local Buffer & Retry Queue              │
-└──────────────────────┬───────────────────────┘
-                       │
-                       │ Outbound HTTPS/TLS / mTLS
-                       │ (Authenticated via Agent Credential)
-                       ▼
-Sentinel Cloud Ingestion Gateway
-┌──────────────────────────────────────────────┐
-│ Ingestion API (Tenant validation & dedupl.)  │
-│ Fleet Intelligence & Cross-Host Correlation  │
-│ Security Operations Console (SOC / DFIR / IR)│
-└──────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  subgraph Customer["Customer workload node (Linux / Kubernetes)"]
+    K["Kernel eBPF<br/>Cilium Tetragon v1.8.0"]
+    R["Sentinel Runtime"]
+    M["Materializer and validator<br/>Event Contract v2"]
+    I["Real-time intelligence<br/>FSM / CEP / anomaly"]
+    L[("Local cryptographic<br/>SQLite ledger")]
+    B["Local buffer and retry queue"]
+    K --> R
+    R --> M --> I
+    I --> L
+    R --> B
+  end
+  subgraph Cloud["Sentinel Cloud ingestion gateway"]
+    G["Ingestion API<br/>tenant validation and deduplication"]
+    F["Fleet intelligence and<br/>cross-host correlation"]
+    S["Security operations console<br/>SOC / DFIR / IR"]
+    G --> F --> S
+  end
+  B -->|"Outbound HTTPS/TLS or mTLS<br/>agent credential"| G
+  G -. "no inbound connection path" .-> R
 ```
 
 ### Tripartite credential model
