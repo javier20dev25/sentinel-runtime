@@ -44,7 +44,7 @@ A first blanket permission normalization also removed execute permission from th
 
 ## Regression found and corrected in source
 
-The live run produced 88 rejected FILE_OPEN_RESULT records because the materializer required an absolute pathname. Linux openat2 accepts relative operands interpreted with dirfd. The Event Contract v2 candidate now retains the raw path, path_form (ABSOLUTE, RELATIVE, EMPTY), and dirfd without fabricating an absolute path. Runtime marks unresolved relative paths for review and does not learn or correlate them as confirmed sensitive-path access. Unit and contract tests cover this mapping. A new live sensor run with the updated build is still required to verify those records end to end.
+The live run produced 88 rejected FILE_OPEN_RESULT records because the materializer required an absolute pathname. Linux openat2 accepts relative operands interpreted with dirfd. The Event Contract v2 candidate on the feature branch (not the published `master` build used below) now retains the raw path, path_form (ABSOLUTE, RELATIVE, EMPTY), and dirfd without fabricating an absolute path. Runtime marks unresolved relative paths for review and does not learn or correlate them as confirmed sensitive-path access. Unit and contract tests cover this mapping. A new live sensor run with the updated feature-branch build is still required to verify those records end to end; the published `master` build still rejects relative open-result paths.
 
 ## Reproduction
 
@@ -87,11 +87,17 @@ While queued Tetragon events from the run were still being processed, the update
 
 The collector now yields to the event loop during sustained delivery so shutdown signals can be handled. On shutdown it persists already processed pending records, discards the remaining in-memory queue, and records the discard lower bound. The reported lower bound does not count events lost earlier in Tetragon or records still in flight outside Runtime's queue.
 
-### Process-execution coverage remains an open gate
+### Process-execution capture on the published master build
 
-The process-execution discrepancy is not resolved by the stream and shutdown protections. In a separate benign check after a fresh Runtime start, a short-lived shell process was launched with a reported process name that differed from its executable. The Runtime ledger's execution-event count and maximum sequence stayed unchanged (`564`, sequence `21,508`). Tetragon's exporter had cumulative execution samples for shell utilities, but those cumulative values could not be attributed to this specific invocation. Earlier aggregate hook-miss and notification-overflow counters were also host-wide snapshots, not per-test deltas.
+A follow-up run used the published `master` build (`35f1029`) against the direct Tetragon socket with `--capture-process-arguments` and the exact policy `sentinel-runtime-observability`. The collector was started first and the test waited for the ledger's `STREAM_CONNECTED` record before generating activity. On this host the stream took about 19.5 seconds to connect; activity generated before that point falls outside the documented `LIVE_EVENTS_AFTER_CONNECTION_ONLY` coverage.
 
-Therefore this check does **not** establish that Runtime detected or recorded the process-name mismatch. It establishes a sensor-to-Runtime coverage discrepancy that requires focused diagnosis. Until event-by-event process-identity matching succeeds, execution capture completeness remains a release blocker for claims that depend on it. Do not infer either detection or evasion solely from the exporter totals.
+After `STREAM_CONNECTED`, five `sleep 1` children were started with a deceptive `argv[0]` (`exec -a sentinel-diag-master-20261114-N /bin/sleep 1`). The ledger contains five `/bin/bash` `PROCESS_EXEC` records carrying the marker in `arguments_raw` (PIDs 11717-11721), five `/bin/sleep` `PROCESS_EXEC` records for the same PIDs with `arguments_raw` `"1"`, and 13 `PROCESS_EXEC` records in total for the window.
+
+The collector summary reported `received 352`, `persisted 352`, `supported 341`, `unsupported 11`, `rejected 0`. The only shutdown loss was a lower bound of 2 queued events (1,976 bytes). A separate 100-exec burst did not increase `bpf_missed_events{Execve}` on this host, although those counters are host-wide and are not per-test proof.
+
+This resolves the earlier execution-capture discrepancy as a test-sequencing error: the synthetic process had been generated before the collector's stream was connected. It does not prove capture before connection, does not establish exact argv boundaries, and has no external timestamp anchor. `--capture-process-arguments` yields `arguments_capture_status: RAW_STRING_ONLY` with `argv: null` because the pinned Tetragon gRPC field is a raw joined string; the deceptive `argv[0]` is preserved in the parent shell's `arguments_raw`, not in the final `sleep` record.
+
+The remaining execution-coverage gate is therefore the documented live-only coverage window, argument-capture fidelity, and measured sensor-side loss, not a missing `PROCESS_EXEC` in the published build. Do not infer detection or evasion from exporter totals alone.
 
 ### Security behavior and remaining boundary
 
