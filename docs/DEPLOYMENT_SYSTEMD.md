@@ -35,7 +35,11 @@ These are operator-installed templates, not a managed installer or fleet control
    sudo find /opt/sentinel-runtime -xdev -perm /022 -print
    ```
 
-   Both commands must produce no output.
+   Both commands must produce no output. Alternatively, run the built-in audit, which exits non-zero on ownership, group/other-write, unexpected-file-type, or unreadable-entry violations:
+
+   ```sh
+   sudo /usr/bin/node /opt/sentinel-runtime/bin/sentinel-runtime.js audit-install --root /opt/sentinel-runtime
+   ```
 
 3. Grant only `sentinel-tetragon-proxy` the narrowest available access to Tetragon's upstream socket. For a group-controlled socket, add its actual group in a proxy service drop-in; for example, use `SupplementaryGroups=tetragon` only if that is the group configured on the host. Do not add `sentinel-runtime` to that group. For remote gRPC, use a CA-verified TLS endpoint and a protected site-specific drop-in for certificate paths.
 4. Start and inspect the service:

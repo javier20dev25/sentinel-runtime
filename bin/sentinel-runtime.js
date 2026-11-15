@@ -21,6 +21,7 @@ const { SentinelRuntimeCloudClient } = require('../src/cloud/cloud-client');
 const { RuntimeIncidentPublisher } = require('../src/cloud/incident-publisher');
 const { ProfileLearner } = require('../src/profiling');
 const { BehaviorEngine, DecisionEngine } = require('../src/intelligence');
+const { auditInstallation } = require('../src/security/install-audit');
 
 const DEFAULT_COLLECTOR_ADDRESS = 'unix:///run/sentinel-runtime/tetragon-readonly.sock';
 
@@ -30,6 +31,7 @@ async function main(argv = process.argv.slice(2)) {
   switch (command) {
     case 'help': case '--help': case '-h': showHelp(); return 0;
     case 'status': printStatus(); return 0;
+    case 'audit-install': return auditInstallCommand(options);
     case 'validate-v2': return validateV2Command(options);
     case 'verify-ledger': return verifyLedgerCommand(options);
     case 'audit-log': return auditLogCommand(options);
@@ -112,6 +114,8 @@ Sentinel Runtime â€” local behavioral event processor (observe-only)
 
 Commands:
   status                                      Show implemented capabilities and limits
+  audit-install [--root <path>] [--expected-uid <uid> --expected-gid <gid>]
+                                               Verify root ownership and non-writable install modes
   validate-v2 --input <event.json>            Validate one Event Contract v2 event
   ingest-tetragon --input <file.jsonl>         Ingest supported Tetragon JSONL events
     --host-id <stable-id> (--boot-id <trusted-id> | --boot-id-file <path>) [--profiles <json> --workload-id <id>] [--db <path>]
@@ -202,6 +206,26 @@ async function tetragonReadOnlyProxyCommand(options) {
   }
   process.stdout.write(`${JSON.stringify({ component: 'tetragon-readonly-proxy', status: 'stopped' })}\n`);
   return 0;
+}
+
+function auditInstallCommand(options) {
+  const root = typeof options.root === 'string' ? options.root : '/opt/sentinel-runtime';
+  const report = auditInstallation(root, {
+    expectedUid: parseNonNegativeInteger(options.expectedUid, '--expected-uid'),
+    expectedGid: parseNonNegativeInteger(options.expectedGid, '--expected-gid')
+  });
+  console.log(JSON.stringify(report, null, 2));
+  return report.ok ? 0 : 1;
+}
+
+function parseNonNegativeInteger(value, label) {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !/^(0|[1-9][0-9]*)$/.test(value)) {
+    throw new TypeError(`${label} must be a non-negative integer`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new TypeError(`${label} exceeds the safe integer range`);
+  return parsed;
 }
 
 function validateV2Command(options) {

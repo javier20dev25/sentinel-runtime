@@ -77,7 +77,7 @@ uint32 uid = 5;
 
 Por tanto:
 - `Process.uid` de Tetragon → `process_identity.euid` en Event Contract v2.
-- El RUID (`ruid`) **solo está disponible** cuando el Collector utiliza credenciales extendidas (`--enable-process-cred`), accesibles en `ProcessCredentials.uid`. En configuración base, se declara `null` con `credentials_capture_status: "EFFECTIVE_ONLY"`.
+- El RUID (`ruid`) **solo está disponible** cuando el Collector utiliza credenciales extendidas (`--enable-process-cred`), accesibles en `ProcessCredentials.uid`. En configuración base, se declara `null` con `credentials_capture_status: "EFFECTIVE_ONLY"`. Si Tetragon entrega `ProcessCredentials.uid` pero omite `process.uid` y `ProcessCredentials.euid`, se preserva el RUID con `credentials_capture_status: "REAL_ONLY"` y `euid: null`.
 - Se prohíbe sustituir un `ruid` desconocido por el `euid` disponible. Son campos semánticamente distintos y potencialmente diferentes bajo `setuid(2)`.
 
 ---
@@ -118,7 +118,7 @@ Por tanto:
 | `start_time` | `Timestamp` message | `process_identity.process_start_time` | Conversión aritmética pura a nanosegundos epoch. | **FATAL**: Registro rechazado. |
 | `binary` | `string` scalar | `process_identity.executable_path` | Preservación literal. | **FATAL**: string vacío indica evento corrupto. |
 | `uid` | `UInt32Value` **wrapper** | `process_identity.euid` | **`Process.uid` de Tetragon = EUID.** Ver §3. | `null` con `euid_status: "ABSENT"`. El wrapper nil indica que Tetragon no estableció el EUID. |
-| *(credentials.uid)* | `UInt32Value` **wrapper** | `process_identity.ruid` | RUID real. Solo con `--enable-process-cred`. | `null` con `credentials_capture_status: "EFFECTIVE_ONLY"`. Prohibido sustituir por EUID. |
+| *(credentials.uid)* | `UInt32Value` **wrapper** | `process_identity.ruid` | RUID real. Solo con `--enable-process-cred`. | `null` con `credentials_capture_status: "EFFECTIVE_ONLY"`; si solo se observa este wrapper, `REAL_ONLY` con `euid: null`. Prohibido sustituir por EUID. |
 | `cwd` | `string` scalar | `payload.working_dir` | Ver tabla de `working_dir_capture_status` en §5. | String vacío: examinar flags (`rootCWD`, `noCWDSupport`, `errorCWD`). **Prohibido asumir `"/"` sin flag `rootCWD`**. |
 | `flags` | `string` scalar | `sensor_metadata.debug_process_flags` | **DEBUG METADATA ONLY.** Preservación literal de tokens emitidos por `FlagStrings`. Ver §5 para catálogo exhaustivo. | Cadena vacía `""` con `debug_process_flags_status: "NO_FLAGS_SET"`. |
 | `in_init_tree` | `BoolValue` **wrapper** | `workload_context.in_init_tree` | Preservación literal. | `null` con `in_init_tree_status: "ABSENT"`. **Prohibido asumir `false`**. |
@@ -324,6 +324,7 @@ Se abandona el modelo de contadores inicializados arbitrariamente en `0`. Cada m
 2. **Credenciales Extendidas (`--enable-process-cred`):**
    - Si está inactivo: `credentials_capture_status = "EFFECTIVE_ONLY"`, `euid = process.uid`, `ruid = null`.
    - Si está activo: se extraen `ruid`, `rgid`, `suid`, `fsuid` desde `ProcessCredentials`.
+   - Si la captura es parcial y solo expone `ProcessCredentials.uid`: `credentials_capture_status = "REAL_ONLY"`, `euid = null`, `ruid = ProcessCredentials.uid`. No se fabrica un EUID.
 
 3. **Cgroups — Distinción de Tres Conceptos Incompatibles:**
 

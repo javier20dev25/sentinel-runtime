@@ -385,6 +385,7 @@
               "type": "string",
               "enum": [
                 "EFFECTIVE_ONLY",
+                "REAL_ONLY",
                 "REAL_AND_EFFECTIVE",
                 "UNAVAILABLE",
                 "ABSENT_IN_SENSOR",
@@ -2092,6 +2093,33 @@
               },
               "ruid": {
                 "type": "null"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "process_identity": {
+            "properties": {
+              "credentials_capture_status": {
+                "const": "REAL_ONLY"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "process_identity": {
+            "properties": {
+              "euid": {
+                "type": "null"
+              },
+              "ruid": {
+                "type": "integer"
               }
             }
           }

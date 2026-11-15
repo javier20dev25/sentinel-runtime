@@ -84,6 +84,19 @@ test('credential collision preserves both raw values and blocks a resolved effec
   assert.equal(event.process_identity.ruid, 1001);
 });
 
+test('real-only credentials preserve ruid without fabricating an effective UID', () => {
+  const process = {
+    ...structuredClone(PROCESS),
+    process_credentials: { uid: { value: 1001 } }
+  };
+  const { event } = materialize({ time: '2026-11-03T01:02:04Z', process_exec: { process } });
+  assert.equal(event.process_identity.credentials_capture_status, 'REAL_ONLY');
+  assert.equal(event.process_identity.euid, null);
+  assert.equal(event.process_identity.ruid, 1001);
+  assert.equal(event.process_identity.euid_capture_status, 'UNAVAILABLE_ABSENT_IN_SENSOR');
+  assert.equal(event.process_identity.ruid_capture_status, 'OBSERVED_EXTENDED_CRED');
+});
+
 test('partial Tetragon process identity preserves raw hooks without fabricating exec_id or executable path', () => {
   const record = kprobe('cap_capable', [
     { capability_arg: { value: { value: 19 }, name: 'CAP_SYS_PTRACE' }, label: 'sentinel_capability' }
@@ -193,6 +206,20 @@ test('supported Tetragon kprobe hooks materialize complete provenance-aware v2 p
   assert.deepEqual(capabilityCheck.payload, {
     capability_value: 21, capability_name: 'CAP_SYS_ADMIN', audit_result: 'DENIED', return_code: -1
   });
+});
+
+test('tcp_sendmsg preserves real-only credentials without rejecting the network result', () => {
+  const record = kprobe('tcp_sendmsg', [
+    { size_arg: '4096', label: 'sentinel_size' },
+    { sock_arg: { family: 'AF_INET', saddr: '192.0.2.10', daddr: '198.51.100.20', sport: 4567, dport: 443, state: 'ESTABLISHED' }, label: 'sentinel_socket' }
+  ], { long_arg: '2048' });
+  record.process_kprobe.process.process_credentials = { uid: { value: 1001 } };
+  const { event } = materialize(record);
+  assert.equal(event.event_type, 'NETWORK_SEND_RESULT');
+  assert.equal(event.process_identity.credentials_capture_status, 'REAL_ONLY');
+  assert.equal(event.process_identity.euid, null);
+  assert.equal(event.process_identity.ruid, 1001);
+  assert.equal(event.payload.bytes_accepted_by_kernel, '2048');
 });
 
 test('materializer rejects unsupported attempt-only reads and cursor/hash mismatches', () => {

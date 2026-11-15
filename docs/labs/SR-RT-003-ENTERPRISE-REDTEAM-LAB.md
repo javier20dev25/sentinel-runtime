@@ -135,6 +135,8 @@ Rejected source types:
 
 This is a materializer/contract gap, not event loss. The rejected events were explicitly recorded as rejections, but their detailed action was not persisted in a valid Event Contract v2 record. The enterprise audit is therefore incomplete.
 
+The code-level cause is a partial credential capture: `ProcessCredentials.uid` can be present while `Process.uid` and `ProcessCredentials.euid` are absent. The materializer previously classified that shape as `ABSENT_IN_SENSOR`, whose schema requires `ruid: null`. The remediation adds the additive `REAL_ONLY` capture status, requires `ruid` to be an integer and `euid` to remain null, and covers both `PROCESS_EXEC` and `tcp_sendmsg` materialization with regression tests. The original observation above is retained; live re-validation is pending after the fixed build is deployed.
+
 ### Integrity and service state
 
 - `verify-ledger`: `valid: true`, `checked: 274559`, `external_anchor: false`.
@@ -200,15 +202,15 @@ Do not run this on a production host. The lab accounts, canaries, and marker fil
 - One application account and one attack run were exercised.
 - The live-only collector window and the seven contract rejections limit completeness claims.
 - The ledger has no external anchor; a privileged host administrator can rewrite it.
-- Cloud incident delivery and analyst workflow were not exercised.
+- Cloud incident delivery was partially exercised: the ledger contains three acknowledgements, including one incident that succeeded after two `TIMEOUT` retries. Stale-heartbeat behavior and the analyst workflow remain untested.
 - No containment path exists to test.
 
 ## Follow-ups
 
-1. Fix the Event Contract v2 `ruid` materialization mismatch so process and kprobe records are not rejected for observed credentials.
-2. Decide whether `tcp_sendmsg` should be a supported audit event; if yes, add a conformance fixture and a live test.
-3. Make the installer/upgrade path enforce root ownership and non-writable modes, then verify after every deployment.
-4. Add a post-install audit to CI or the systemd deployment checklist.
-5. Test on a native Linux VM with a host firewall, auditd, and a non-WSL2 kernel.
-6. Add a Cloud stale-heartbeat and incident-delivery exercise.
-7. Keep enforcement disabled until authorization, rollback, and failure-mode reviews pass.
+1. **Addressed in code:** Event Contract v2 now represents partial `ruid`-only credentials as `REAL_ONLY`; regression tests cover process and `tcp_sendmsg` records. Live re-validation is pending deployment.
+2. **Addressed in code:** `tcp_sendmsg` remains a supported audit event; the rejection was caused by credential provenance, not missing hook support. The new regression test proves a `NETWORK_SEND_RESULT` survives a real-only credential capture.
+3. **Addressed in code:** `audit-install` rejects root ownership mismatches and group/other-writable paths. The deployment checklist now invokes it after install and upgrade.
+4. **Addressed in code:** `npm run audit:install` and the documented post-install audit provide the CI/checklist hook; CI wiring itself remains pending.
+5. **Open:** test on a native Linux VM with a host firewall, auditd, and a non-WSL2 kernel.
+6. **Partially exercised:** ledger acknowledgements confirm incident delivery, including a timeout retry; stale-heartbeat behavior remains untested.
+7. **Retained:** enforcement remains disabled until authorization, rollback, and failure-mode reviews pass.

@@ -510,8 +510,11 @@ From `ProcessCredentials`:
 | **C1: Base sensor only** | Present ($V_1$) | Absent | Absent | $V_1$ | null | `OBSERVED_PROCESS_UID` | `UNAVAILABLE_BASE_SENSOR` | `EFFECTIVE_ONLY` | Normal operation; `--enable-process-cred` not enabled. |
 | **C2: Extended creds agree** | Present ($V_1$) | Present ($V_2 = V_1$) | Present ($V_3$) | $V_1$ | $V_3$ | `OBSERVED_EXTENDED_CRED` | `OBSERVED_EXTENDED_CRED` | `REAL_AND_EFFECTIVE` | Clean capture; both sources agree. |
 | **C3: Base wrapper absent** | Absent | Present ($V_2$) | Present ($V_3$) | $V_2$ | $V_3$ | `OBSERVED_EXTENDED_CRED` | `OBSERVED_EXTENDED_CRED` | `REAL_AND_EFFECTIVE` | Extended credentials used as sole source. |
+| **C3.1: Real wrapper only** | Absent | Absent | Present ($V_3$) | null | $V_3$ | `UNAVAILABLE_ABSENT_IN_SENSOR` | `OBSERVED_EXTENDED_CRED` | `REAL_ONLY` | Partial extended credentials preserve the observed real UID without fabricating an effective UID. |
 | **C4: EUID collision** | Present ($V_1$) | Present ($V_2 \ne V_1$) | Present ($V_3$) | **PRESERVED: both $V_1$ and $V_2$** | $V_3$ | `EUID_COLLISION_FLAGGED` | `OBSERVED_EXTENDED_CRED` | `COLLISION_UNRESOLVED` | **NEITHER value is discarded.** Both raw values stored. Anomaly emitted. Identity MUST NOT be used as the exclusive predicate for destructive enforcement. |
 | **C5: Both absent** | Absent | Absent | Absent | null | null | `UNAVAILABLE_ABSENT_IN_SENSOR` | `UNAVAILABLE_ABSENT_IN_SENSOR` | `ABSENT_IN_SENSOR` | Valid in synthetic or degraded sensor scenarios. |
+
+**C3.1 rationale:** Tetragon can expose `ProcessCredentials.uid` without exposing either `Process.uid` or `ProcessCredentials.euid`. That partial capture must preserve `ruid` rather than classify the event as `ABSENT_IN_SENSOR`; `REAL_ONLY` makes the absence of an effective UID explicit and prevents a non-null `ruid` from being rejected by the schema.
 
 **Normative rules for C4:**
 1. `euid` field in the event **must not** silently drop either raw value. Both `process_uid_raw` (from `Process.uid`) and `credentials_euid_raw` (from `ProcessCredentials.euid`) must be preserved as separate fields.

@@ -317,6 +317,28 @@ test('Suite V2-6: EUID & Wrapper Nullability with Status (V2-03)', async (t) => 
     ev.process_identity.credentials_capture_status = 'EFFECTIVE_ONLY';
     assert.strictEqual(validateV2(ev), false);
   });
+
+  await t.test('6.7 Acepta ruid entero con REAL_ONLY y euid null', () => {
+    const ev = JSON.parse(JSON.stringify(base));
+    ev.process_identity.euid = null;
+    ev.process_identity.ruid = 1001;
+    ev.process_identity.credentials_capture_status = 'REAL_ONLY';
+    assert.strictEqual(validateV2(ev), true);
+  });
+
+  await t.test('6.8 Rechaza REAL_ONLY con euid no nulo o ruid nulo', () => {
+    const ev = JSON.parse(JSON.stringify(base));
+    ev.process_identity.euid = 1000;
+    ev.process_identity.ruid = 1001;
+    ev.process_identity.credentials_capture_status = 'REAL_ONLY';
+    assert.strictEqual(validateV2(ev), false);
+
+    const missingRuid = JSON.parse(JSON.stringify(base));
+    missingRuid.process_identity.euid = null;
+    missingRuid.process_identity.ruid = null;
+    missingRuid.process_identity.credentials_capture_status = 'REAL_ONLY';
+    assert.strictEqual(validateV2(missingRuid), false);
+  });
 });
 
 // -----------------------------------------------------------------------------

@@ -232,7 +232,8 @@ function toProcessIdentity(source) {
     : source.credentialsPresent ? 'UNAVAILABLE_ABSENT_IN_SENSOR' : 'UNAVAILABLE_BASE_SENSOR';
   const captureStatus = collision ? 'COLLISION_UNRESOLVED'
     : euid !== null && ruid !== null ? 'REAL_AND_EFFECTIVE'
-      : euid !== null ? 'EFFECTIVE_ONLY' : 'ABSENT_IN_SENSOR';
+      : euid !== null ? 'EFFECTIVE_ONLY'
+        : ruid !== null ? 'REAL_ONLY' : 'ABSENT_IN_SENSOR';
   const flags = typeof source.flags === 'string' ? source.flags : null;
   if (flags !== null && flags.length > 1024) throw new EventMaterializationError('PROCESS_FLAGS_TOO_LONG', 'Tetragon process flags exceed the Event Contract v2 limit');
   const debugFlags = flags === null ? null : flags.trim().split(/\s+/).filter(Boolean);
