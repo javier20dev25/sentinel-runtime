@@ -52,6 +52,10 @@ class EvidenceLedger {
         ON evidence_records(CASE WHEN json_valid(payload_json)
           THEN lower(json_extract(payload_json, '$.event.sourceEventKey')) END)
         WHERE record_type = 'event';
+      CREATE INDEX IF NOT EXISTS evidence_source_checkpoint_source_id
+        ON evidence_records(CASE WHEN json_valid(payload_json)
+          THEN json_extract(payload_json, '$.checkpoint.source_id') END)
+        WHERE record_type = 'source_checkpoint';
     `);
     this.migrateLegacyIncidents();
   }
@@ -144,16 +148,19 @@ class EvidenceLedger {
     if (typeof sourceId !== 'string' || sourceId.length === 0 || sourceId.length > 512) {
       throw new TypeError('sourceId must be a bounded non-empty string');
     }
-    const rows = this.db.prepare(`
+    const row = this.db.prepare(`
       SELECT sequence, payload_json FROM evidence_records
-      WHERE record_type = 'source_checkpoint' ORDER BY sequence DESC
-    `).all();
-    for (const row of rows) {
-      let payload;
-      try { payload = JSON.parse(row.payload_json); } catch { continue; }
-      if (payload?.checkpoint?.source_id === sourceId) {
-        return { sequence: Number(row.sequence), ...payload.checkpoint };
-      }
+      WHERE record_type = 'source_checkpoint' AND (
+        CASE WHEN json_valid(payload_json)
+          THEN json_extract(payload_json, '$.checkpoint.source_id') END = ?
+      )
+      ORDER BY sequence DESC LIMIT 1
+    `).get(sourceId);
+    if (!row) return null;
+    let payload;
+    try { payload = JSON.parse(row.payload_json); } catch { return null; }
+    if (payload?.checkpoint?.source_id === sourceId) {
+      return { sequence: Number(row.sequence), ...payload.checkpoint };
     }
     return null;
   }
@@ -177,15 +184,21 @@ class EvidenceLedger {
     try {
       const uniquePrepared = [];
       const stagedKeys = new Set();
-      const existingKey = this.db.prepare(`
+      const existingKeyV2 = this.db.prepare(`
         SELECT sequence FROM evidence_records
         WHERE record_type = 'event' AND (
           CASE WHEN json_valid(payload_json)
-            THEN lower(json_extract(payload_json, '$.event.source_event_key')) END = ? OR
+            THEN lower(json_extract(payload_json, '$.event.source_event_key')) END = ?
+        )
+        LIMIT 1
+      `);
+      const existingKeyLegacy = this.db.prepare(`
+        SELECT sequence FROM evidence_records
+        WHERE record_type = 'event' AND (
           CASE WHEN json_valid(payload_json)
             THEN lower(json_extract(payload_json, '$.event.sourceEventKey')) END = ?
         )
-        ORDER BY sequence ASC LIMIT 1
+        LIMIT 1
       `);
       for (const item of prepared) {
         const event = item.recordType === 'event' ? item.payload?.event : null;
@@ -196,7 +209,7 @@ class EvidenceLedger {
           continue;
         }
         const canonicalKey = key.toLowerCase();
-        if (stagedKeys.has(canonicalKey) || existingKey.get(canonicalKey, canonicalKey)) {
+        if (stagedKeys.has(canonicalKey) || existingKeyV2.get(canonicalKey) || existingKeyLegacy.get(canonicalKey)) {
           continue;
         }
         stagedKeys.add(canonicalKey);
@@ -335,39 +348,46 @@ class EvidenceLedger {
   }
 
   verifyIntegrity() {
-    const rows = this.db.prepare(`
+    const pageSize = 1000;
+    const statement = this.db.prepare(`
       SELECT sequence, timestamp, record_type, payload_json, previous_hash, record_hash
-      FROM evidence_records ORDER BY sequence ASC
-    `).all();
+      FROM evidence_records WHERE sequence > ? ORDER BY sequence ASC LIMIT ?
+    `);
     let previousHash = GENESIS_HASH;
     let expectedSequence = 1;
-    for (const row of rows) {
-      if (Number(row.sequence) !== expectedSequence) {
-        return { valid: false, checked: expectedSequence - 1, sequence: Number(row.sequence), reason: 'SEQUENCE_GAP' };
+    let lastSequence = 0;
+    while (true) {
+      const rows = statement.all(lastSequence, pageSize);
+      if (rows.length === 0) break;
+      for (const row of rows) {
+        if (Number(row.sequence) !== expectedSequence) {
+          return { valid: false, checked: expectedSequence - 1, sequence: Number(row.sequence), reason: 'SEQUENCE_GAP' };
+        }
+        if (row.previous_hash !== previousHash) {
+          return { valid: false, checked: expectedSequence - 1, sequence: expectedSequence, reason: 'PREVIOUS_HASH_MISMATCH' };
+        }
+        let parsed;
+        try {
+          parsed = JSON.parse(row.payload_json);
+        } catch {
+          return { valid: false, checked: expectedSequence - 1, sequence: expectedSequence, reason: 'INVALID_PAYLOAD_JSON' };
+        }
+        if (parsed?.timestamp !== row.timestamp) {
+          return { valid: false, checked: expectedSequence - 1, sequence: expectedSequence, reason: 'TIMESTAMP_MISMATCH' };
+        }
+        if (canonicalJson(parsed) !== row.payload_json) {
+          return { valid: false, checked: expectedSequence - 1, sequence: expectedSequence, reason: 'NON_CANONICAL_PAYLOAD' };
+        }
+        const expectedHash = hashRecord(expectedSequence, row.record_type, row.payload_json, previousHash);
+        if (row.record_hash !== expectedHash) {
+          return { valid: false, checked: expectedSequence - 1, sequence: expectedSequence, reason: 'RECORD_HASH_MISMATCH' };
+        }
+        previousHash = row.record_hash;
+        expectedSequence++;
       }
-      if (row.previous_hash !== previousHash) {
-        return { valid: false, checked: expectedSequence - 1, sequence: expectedSequence, reason: 'PREVIOUS_HASH_MISMATCH' };
-      }
-      let parsed;
-      try {
-        parsed = JSON.parse(row.payload_json);
-      } catch {
-        return { valid: false, checked: expectedSequence - 1, sequence: expectedSequence, reason: 'INVALID_PAYLOAD_JSON' };
-      }
-      if (parsed?.timestamp !== row.timestamp) {
-        return { valid: false, checked: expectedSequence - 1, sequence: expectedSequence, reason: 'TIMESTAMP_MISMATCH' };
-      }
-      if (canonicalJson(parsed) !== row.payload_json) {
-        return { valid: false, checked: expectedSequence - 1, sequence: expectedSequence, reason: 'NON_CANONICAL_PAYLOAD' };
-      }
-      const expectedHash = hashRecord(expectedSequence, row.record_type, row.payload_json, previousHash);
-      if (row.record_hash !== expectedHash) {
-        return { valid: false, checked: expectedSequence - 1, sequence: expectedSequence, reason: 'RECORD_HASH_MISMATCH' };
-      }
-      previousHash = row.record_hash;
-      expectedSequence++;
+      lastSequence = Number(rows[rows.length - 1].sequence);
     }
-    return { valid: true, checked: rows.length, head_hash: previousHash, external_anchor: false };
+    return { valid: true, checked: expectedSequence - 1, head_hash: previousHash, external_anchor: false };
   }
 
   close() {

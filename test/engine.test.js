@@ -266,6 +266,18 @@ test('Evidence ledger does not deduplicate malformed or non-cryptographic source
   } finally { ledger.close(); }
 });
 
+test('Evidence ledger verifies chains larger than one pagination window', () => {
+  const ledger = new EvidenceLedger(':memory:');
+  try {
+    const batch = Array.from({ length: 1205 }, (_, index) => ({ event: { value: `event-${index}` } }));
+    ledger.recordEvents(batch);
+    const integrity = ledger.verifyIntegrity();
+    assert.equal(integrity.valid, true);
+    assert.equal(integrity.checked, batch.length);
+    assert.equal(integrity.external_anchor, false);
+  } finally { ledger.close(); }
+});
+
 test('Evidence ledger can reopen a database with malformed payloads and report corruption', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sentinel-runtime-corrupt-index-'));
   const dbPath = path.join(directory, 'evidence.sqlite');
