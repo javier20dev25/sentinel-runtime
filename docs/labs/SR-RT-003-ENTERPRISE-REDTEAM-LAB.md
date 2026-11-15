@@ -1,6 +1,7 @@
 # SR-RT-003 - Enterprise-style red-team lab
 
 **Date:** 2026-11-14
+**Live re-validation:** 2026-11-15
 **Environment:** Ubuntu on WSL2, kernel `6.18.58.1-microsoft-standard-WSL2`, Node `v22.23.4`, Tetragon `v1.8.0`, Sentinel Runtime `v0.2.0`
 **Result:** partial. A simulated application-account compromise succeeded before and after Sentinel Runtime was enabled. Runtime produced a partial audit trail but did not prevent, block, or contain the action. This is expected for the current observe-only release.
 
@@ -135,7 +136,26 @@ Rejected source types:
 
 This is a materializer/contract gap, not event loss. The rejected events were explicitly recorded as rejections, but their detailed action was not persisted in a valid Event Contract v2 record. The enterprise audit is therefore incomplete.
 
-The code-level cause is a partial credential capture: `ProcessCredentials.uid` can be present while `Process.uid` and `ProcessCredentials.euid` are absent. The materializer previously classified that shape as `ABSENT_IN_SENSOR`, whose schema requires `ruid: null`. The remediation adds the additive `REAL_ONLY` capture status, requires `ruid` to be an integer and `euid` to remain null, and covers both `PROCESS_EXEC` and `tcp_sendmsg` materialization with regression tests. The original observation above is retained; live re-validation is pending after the fixed build is deployed.
+The code-level cause is a partial credential capture: `ProcessCredentials.uid` can be present while `Process.uid` and `ProcessCredentials.euid` are absent. The materializer previously classified that shape as `ABSENT_IN_SENSOR`, whose schema requires `ruid: null`. The remediation adds the additive `REAL_ONLY` capture status, requires `ruid` to be an integer and `euid` to remain null, and covers both `PROCESS_EXEC` and `tcp_sendmsg` materialization with regression tests. The original observation above is retained; the post-remediation live re-validation is recorded below.
+
+### Live re-validation after remediation
+
+The fixed build (`beb70b7`) was installed into `/opt/sentinel-runtime`, the service was restarted, and `audit-install --root /opt/sentinel-runtime` returned `ok: true`, `entries: 2218`, `symlinks: 0`, `violations: []`.
+
+The first re-validation still produced no send records. The cause was separate from the contract: the Tetragon policy listed `/usr/bin/python3` but not its canonical target `/usr/bin/python3.14`, so the `tcp_sendmsg` kprobe did not fire. `/usr/bin/python3.14` was added to both `vfs_read` and `tcp_sendmsg` `matchBinaries`, the policy was reinstalled, and Tetragon reported `STATE enabled` with `MODE monitor_only`.
+
+The lab was then repeated with marker `realonly-final-20261115`. The ledger window `sequence > 290310` contains 608 records:
+
+| Observation | Result |
+|---|---:|
+| `EVENT_CONTRACT_V2_REJECT` | 0 |
+| `NETWORK_SEND_RESULT` | 2 |
+| `REAL_ONLY` credential records | 7 |
+| `REAL_AND_EFFECTIVE` credential records | 44 |
+| `ABSENT_IN_SENSOR` records | 251 |
+| New `EVENT_LOSS` | 0 |
+
+The lab exfiltration is `sequence 290572`: `NETWORK_SEND_RESULT`, `/usr/bin/python3`, `bytes_accepted_by_kernel: 100`, `bytes_requested: 100`, `127.0.0.1:41685`, `credentials_capture_status: REAL_AND_EFFECTIVE`. A direct probe produced `sequence 290415` with 200 bytes. A `PROCESS_EXEC` from `sudo` at `sequence 290557` was accepted as `REAL_ONLY` with `ruid: 1000` and `euid: null`, proving the new path works on live data. The seven original rejections remain historical; no new rejection appeared after deployment.
 
 ### Integrity and service state
 
@@ -152,7 +172,7 @@ The code-level cause is a partial credential capture: `ProcessCredentials.uid` c
 | Was the hardened unprivileged account able to compromise the host? | No in this scope: both canaries were denied and sudo failed. |
 | Was the simulated compromised application account able to act? | Yes: it read its canary, opened `/etc/passwd`, sent data over loopback, and created a marker. |
 | Did Sentinel Runtime stop or contain it? | No. The policy is monitor-only and the decision is `OBSERVE_ONLY`. |
-| Did Sentinel Runtime audit it? | Partially. Process execution, sensitive file opens, and the loopback connect were recorded; seven contract rejections and the missing send record leave gaps. |
+| Did Sentinel Runtime audit it? | Partially during the original run: process execution, sensitive file opens, and the loopback connect were recorded; seven contract rejections and the missing send record left gaps. The post-remediation run closed both gaps with zero rejections and a live `NETWORK_SEND_RESULT`. |
 | Did Runtime classify it as malicious? | No. The recorded decisions were `NORMAL` with no triggered rules. |
 | Is the ledger valid? | Yes locally, with no external anchor. |
 
@@ -200,15 +220,15 @@ Do not run this on a production host. The lab accounts, canaries, and marker fil
 - No real secret was used.
 - The "persistence" marker is not an active persistence mechanism.
 - One application account and one attack run were exercised.
-- The live-only collector window and the seven contract rejections limit completeness claims.
+- The original live-only collector window and its seven contract rejections limit completeness claims for that baseline. The post-remediation window has zero rejections, but it was collected after a collector restart and remains subject to `replay_supported: false`.
 - The ledger has no external anchor; a privileged host administrator can rewrite it.
 - Cloud incident delivery was partially exercised: the ledger contains three acknowledgements, including one incident that succeeded after two `TIMEOUT` retries. Stale-heartbeat behavior and the analyst workflow remain untested.
 - No containment path exists to test.
 
 ## Follow-ups
 
-1. **Addressed in code:** Event Contract v2 now represents partial `ruid`-only credentials as `REAL_ONLY`; regression tests cover process and `tcp_sendmsg` records. Live re-validation is pending deployment.
-2. **Addressed in code:** `tcp_sendmsg` remains a supported audit event; the rejection was caused by credential provenance, not missing hook support. The new regression test proves a `NETWORK_SEND_RESULT` survives a real-only credential capture.
+1. **Addressed and live-validated:** Event Contract v2 represents partial `ruid`-only credentials as `REAL_ONLY`; regression tests cover process and `tcp_sendmsg` records. The post-remediation window recorded seven accepted `REAL_ONLY` records and zero rejections.
+2. **Addressed and live-validated:** `tcp_sendmsg` remains a supported audit event. The rejection was caused by credential provenance, not missing hook support. The live lab now records `NETWORK_SEND_RESULT`; the remaining policy gap was the missing canonical `/usr/bin/python3.14` match.
 3. **Addressed in code:** `audit-install` rejects root ownership mismatches and group/other-writable paths. The deployment checklist now invokes it after install and upgrade.
 4. **Addressed in code:** `npm run audit:install` and the documented post-install audit provide the CI/checklist hook; CI wiring itself remains pending.
 5. **Open:** test on a native Linux VM with a host firewall, auditd, and a non-WSL2 kernel.

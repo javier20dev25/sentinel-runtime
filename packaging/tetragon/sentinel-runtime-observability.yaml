@@ -54,6 +54,7 @@ spec:
               values:
                 - /usr/bin/python3
                 - /usr/bin/python3.12
+                - /usr/bin/python3.14
                 - /usr/bin/dash
           matchArgs:
             - index: 0
@@ -110,4 +111,5 @@ spec:
               values:
                 - /usr/bin/python3
                 - /usr/bin/python3.12
+                - /usr/bin/python3.14
                 - /usr/bin/dash
