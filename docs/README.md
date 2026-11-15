@@ -9,8 +9,10 @@ This index separates documents that describe shipped behavior from designs and h
 - [Runtime self-protection threat model](threat-model/RUNTIME_SELF_PROTECTION.md): attacker capabilities, implemented controls, validation, and trust limits.
 - [Runtime lab report](labs/SR-RT-001-LOCAL-RESILIENCE.md): bounded WSL2 test procedure and observed output boundaries.
 - [Telemetry-loss hardening lab](labs/SR-RT-002-TELEMETRY-LOSS-HARDENING.md): filtered file-open policy, ledger pagination, controlled load, and restart validation.
-- [Systemd packaging notes](../packaging/systemd/README.md): unit files and Linux packaging details.
+- [Enterprise-style red-team lab](labs/SR-RT-003-ENTERPRISE-REDTEAM-LAB.md): hardened baseline, simulated application compromise, before/after audit comparison, contract rejections, and the observe-only verdict.
+- [Systemd packaging units](../packaging/systemd/): unit files and Linux packaging details.
 - [Configuration guide](CONFIGURATION.md): supported environment variables and CLI settings.
+- [Digital evidence handling standard](standards/SENTINEL_DIGITAL_EVIDENCE_HANDLING_STANDARD_V1.md), [incident investigation standard](standards/SENTINEL_INCIDENT_INVESTIGATION_STANDARD_V1.md), [compliance readiness matrix](standards/SENTINEL_COMPLIANCE_READINESS_MATRIX_V1.md), and [professional report template](standards/SENTINEL_PROFESSIONAL_REPORT_TEMPLATE_V1.md).
 
 ## Normative or candidate specifications
 
@@ -22,8 +24,8 @@ Event Contract v2 remains a development candidate. A schema, mapping, or design 
 
 ## Historical reports and reviews
 
-Files named REVIEW, REPORT, CORRECTION, PHASE, or MILESTONE are retained for traceability. Read their status banners and dates before relying on them. They may record superseded claims, incomplete experiments, or design intent. The current source and the three current operational documents above take precedence for shipped behavior.
+Files named REVIEW, REPORT, CORRECTION, PHASE, or MILESTONE are retained for traceability. Read their status banners and dates before relying on them. They may record superseded claims, incomplete experiments, or design intent. The current source and the current operational documents above take precedence for shipped behavior.
 
 ## Manual scripts and experiments
 
-The scripts under scripts/manual are intentionally excluded from automatic test discovery. The SR-RT-001 runner is bounded, unprivileged, WSL2-only, and limited to local loopback traffic as described in its lab report. Other smoke scripts have separate prerequisites; review each script before using it in a disposable laboratory.
+The scripts under scripts/manual are intentionally excluded from automatic test discovery. The SR-RT-001 and SR-RT-003 runners are bounded, unprivileged, WSL2-only, and limited to synthetic canaries and local loopback traffic as described in their lab reports. Other smoke scripts have separate prerequisites; review each script before using it in a disposable laboratory.

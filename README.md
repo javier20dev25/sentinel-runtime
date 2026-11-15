@@ -58,7 +58,8 @@ flowchart TB
     CI[".github/workflows/ci.yml"]
   end
   TEST["test/ and labs/<br/>unit, integration, and lab demos"]
-  DOCS["docs/<br/>status, threat model, specs"]
+  LAB["scripts/manual + docs/labs<br/>bounded lab evidence"]
+  DOCS["docs/<br/>status, threat model, specs, standards, labs"]
   CLI --> COL
   COL --> ADP
   ADP --> VAL
@@ -71,6 +72,7 @@ flowchart TB
   PKG --> CLI
   CI --> TEST
   TEST --> ENG
+  LAB -.-> DOCS
   DOCS -.-> CLI
 ```
 
@@ -155,7 +157,7 @@ Runtime only preserves and reports. This release exposes no Cloud-to-host task c
 
 ## Lab evidence
 
-The reproducible lab and its limits are in [SR-RT-001 Local Resilience Lab](docs/labs/SR-RT-001-LOCAL-RESILIENCE.md).
+The reproducible labs and their limits are in [SR-RT-001 Local Resilience Lab](docs/labs/SR-RT-001-LOCAL-RESILIENCE.md), [SR-RT-002 Telemetry-Loss Hardening](docs/labs/SR-RT-002-TELEMETRY-LOSS-HARDENING.md), and [SR-RT-003 Enterprise-Style Red-Team Lab](docs/labs/SR-RT-003-ENTERPRISE-REDTEAM-LAB.md).
 
 - A bounded WSL2 stress exercise generated measurable Tetragon observer-overflow and queue-loss counter increases. Runtime recorded loss evidence and marked observability degraded.
 - The exact synthetic child processes from that flood exercise were not reliably matched in the Runtime ledger. This run does **not** prove the agent detected every generated action. A later controlled run that waited for the live stream to connect matched five marked executions, which attributes the earlier mismatch to test sequencing rather than a missing `PROCESS_EXEC` path.
@@ -164,12 +166,55 @@ The reproducible lab and its limits are in [SR-RT-001 Local Resilience Lab](docs
 - The proxy stream-limit regression test passed on Linux: a second `GetEvents` stream is rejected with `RESOURCE_EXHAUSTED`, and the slot becomes available after the first stream disconnects. Deployment-specific testing remains required for each customer systemd/Tetragon setup.
 - A follow-up on the published `master` build waited for `STREAM_CONNECTED` before starting five marked `sleep 1` children with a deceptive `argv[0]`. The ledger contains the five `/bin/bash` `PROCESS_EXEC` records carrying the marker (PIDs 11717-11721) and five `/bin/sleep` records for the same PIDs; the collector reported `received 352`, `persisted 352`, `supported 341`, `unsupported 11`, and `rejected 0`. The only shutdown loss was a lower bound of 2 queued events (1,976 bytes).
 - Execution visibility is therefore not an open “missing `PROCESS_EXEC`” gate on this build, but it is not complete. The stream took about 19.5 seconds to connect, so activity generated before connection is outside the documented live-only coverage; `--capture-process-arguments` preserves a raw joined string (`arguments_capture_status: RAW_STRING_ONLY`, `argv: null`) rather than exact argument boundaries; and sensor-side loss remains a separate, host-wide measurement that cannot be attributed per test.
+- The enterprise-style red-team lab simulated a compromised application account after a hardened baseline. The test found and corrected 49 group/other-writable install paths (including `bin` and `src`) and one source file owned by the service account. The simulated compromise succeeded without Runtime and again with Runtime enabled; Runtime recorded process execution, `/etc/passwd` opens, and the loopback connect, but did not stop the action. Seven records were rejected at the Event Contract v2 boundary, and no valid `TCP_SENDMSG` record appeared. See [SR-RT-003](docs/labs/SR-RT-003-ENTERPRISE-REDTEAM-LAB.md).
 
 These are observations from one WSL2 laboratory, not a production certification or a benchmark against other products.
 
+## Enterprise-style red-team lab
+
+The [SR-RT-003 report](docs/labs/SR-RT-003-ENTERPRISE-REDTEAM-LAB.md) documents a bounded WSL2 exercise with a hardened baseline, separate application and attacker accounts, `0600` canaries, no active SSH service, kernel hardening, and a root-owned non-writable Runtime install. It is a lab baseline, not a certified enterprise image.
+
+| Phase | Observed outcome |
+|---|---|
+| Hardened baseline, unprivileged attacker | Application and root canaries denied; `sudo -n true` failed |
+| Simulated application-account compromise, sensor stopped | Canary read, loopback transfer received, marker created; no ledger records |
+| Same compromise, Sentinel Runtime enabled | Attack still succeeded; 43 ledger records, including 9 `PROCESS_EXEC`, 8 `/etc/passwd` opens, and the loopback connect; 0 `EVENT_LOSS`; 7 contract rejections |
+| Containment | Not performed; policy is `TP_MODE_MONITOR_ONLY` and decisions are `OBSERVE_ONLY` |
+| Verdict | Partial audit visibility, not prevention or full action reconstruction |
+
+The exercise also found a deployment regression: 49 Runtime paths were group/other-writable after the hybrid redeploy, and `src/evidence.js` was owned by `sentinel-runtime`. Both were corrected before the attack. The install tree now has no group/other-writable paths or non-root-owned files.
+
+### Red-team tooling decision
+
+No external red-team repository or attack framework was cloned for this lab. Running arbitrary GitHub tooling inside a host that already has a privileged sensor would add a supply-chain and host-safety risk without improving the specific test. The exercise uses one first-party, confirmation-gated runner with synthetic canaries, fixed timeouts, a loopback-only listener, and no privilege escalation. It did not execute Atomic Red Team, CALDERA, Metasploit, Cobalt Strike, or a malware sample.
+
+If a team later adopts an external framework, pin and hash the commit, run it in a disposable VM with no production credentials, disable external egress, exercise one technique at a time, and keep the sensor in monitor mode until authorization and rollback are reviewed.
+
+## Assurance and further reading
+
+| Area | Document |
+|---|---|
+| Security boundary and residual risk | [Runtime self-protection threat model](docs/threat-model/RUNTIME_SELF_PROTECTION.md) |
+| Threat model and attack scenarios | [Threat model](docs/threat-model/THREAT_MODEL_001.md), [attack scenarios](docs/threat-model/ATTACK_SCENARIOS_001.md) |
+| Adversarial test planning | [Adversarial test plan](docs/threat-model/ADVERSARIAL_TEST_PLAN_001.md) |
+| Digital evidence handling | [Evidence handling standard](docs/standards/SENTINEL_DIGITAL_EVIDENCE_HANDLING_STANDARD_V1.md) |
+| Incident investigation | [Incident investigation standard](docs/standards/SENTINEL_INCIDENT_INVESTIGATION_STANDARD_V1.md) |
+| Compliance readiness | [Compliance readiness matrix](docs/standards/SENTINEL_COMPLIANCE_READINESS_MATRIX_V1.md) |
+| Professional reporting | [Report template](docs/standards/SENTINEL_PROFESSIONAL_REPORT_TEMPLATE_V1.md) |
+| Performance evidence | [gRPC benchmark 001](docs/benchmarks/SR-GRPC-001.md), [gRPC benchmark 002](docs/benchmarks/SR-GRPC-002.md), [ingest benchmark](docs/benchmarks/SR-INGEST-001.md) |
+
+External references used for terminology and response expectations:
+
+- [NIST SP 800-61 Rev. 3: Incident Response Recommendations](https://csrc.nist.gov/pubs/sp/800/61/r3/final)
+- [NIST SP 800-86: Guide to Integrating Forensic Techniques into Incident Response](https://csrc.nist.gov/pubs/sp/800/86/final)
+- [MITRE ATT&CK](https://attack.mitre.org/)
+- [Atomic Red Team](https://github.com/redcanaryco/atomic-red-team)
+- [CISA Known Exploited Vulnerabilities Catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog)
+- [Cilium Tetragon documentation](https://tetragon.io/docs/)
+
 ## Run and inspect
 
-Requirements: Linux for live Tetragon collection, Node.js 22.5 or later, and Tetragon v1.8.0. For the systemd setup, follow [Linux deployment](docs/DEPLOYMENT_SYSTEMD.md). Packaging notes are in [the systemd directory](packaging/systemd/README.md).
+Requirements: Linux for live Tetragon collection, Node.js 22.5 or later, and Tetragon v1.8.0. For the systemd setup, follow [Linux deployment](docs/DEPLOYMENT_SYSTEMD.md). Packaging units are in [the systemd directory](packaging/systemd/).
 
 ```sh
 npm ci
@@ -187,14 +232,18 @@ For the explicitly bounded local resilience exercise, see its guide and the guar
 | Current code and validation status | [Implementation status](docs/IMPLEMENTATION_STATUS.md) |
 | Security boundary and self-protection | [Runtime self-protection threat model](docs/threat-model/RUNTIME_SELF_PROTECTION.md) |
 | Linux installation, permissions, systemd | [Deployment guide](docs/DEPLOYMENT_SYSTEMD.md) |
-| Systemd unit packaging | [Packaging notes](packaging/systemd/README.md) |
+| Systemd unit packaging | [Packaging units](packaging/systemd/) |
 | Specifications, reports, and operational docs | [Documentation index](docs/README.md) |
 | Event source mappings | [Tetragon v1.8.0 field mapping](docs/specs/TETRAGON_V1_8_0_FIELD_MAPPING.md) |
 | Local resilience exercise | [SR-RT-001 lab report](docs/labs/SR-RT-001-LOCAL-RESILIENCE.md) |
+| Telemetry-loss hardening | [SR-RT-002 lab report](docs/labs/SR-RT-002-TELEMETRY-LOSS-HARDENING.md) |
+| Enterprise-style red-team exercise | [SR-RT-003 lab report](docs/labs/SR-RT-003-ENTERPRISE-REDTEAM-LAB.md) |
+| Evidence, investigation, and reporting standards | [Assurance and further reading](#assurance-and-further-reading) |
 
 ## Open enterprise gates
 
-- Validate the installer, file ownership, upgrades, and systemd sandbox across supported Linux distributions.
+- Validate the installer, file ownership, upgrades, and systemd sandbox across supported Linux distributions. The enterprise lab found a redeploy regression that reintroduced 0777 modes; the deploy path needs an enforced post-install audit.
+- Resolve the Event Contract v2 `ruid` rejection observed in the enterprise lab, and decide whether `TCP_SENDMSG` is a supported audit shape with a conformance test.
 - Demonstrate event capture and end-to-end latency under load with quantified loss and no unreported gaps.
 - Add remote signed ledger checkpoints, retention controls, disk-exhaustion handling, and independent heartbeat alerting.
 - Validate and freeze Event Contract v2 and its producer implementations.

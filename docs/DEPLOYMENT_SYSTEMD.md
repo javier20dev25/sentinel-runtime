@@ -28,6 +28,15 @@ These are operator-installed templates, not a managed installer or fleet control
 
    Set `SENTINEL_RUNTIME_HOST_ID` to a stable inventory identifier. The collector address defaults to `/run/sentinel-runtime/tetragon-readonly.sock`. Set `SENTINEL_TETRAGON_UPSTREAM_ADDRESS` to the host's Tetragon socket or TLS-protected TCP endpoint. Keep both environment files root-owned. The Runtime environment file is mode `0600` so it remains safe if it contains the host token; the proxy file should not contain private-key material.
 
+   Run this post-install and post-upgrade audit every time files are copied into the active tree. A 2026-11-14 enterprise lab found 49 group/other-writable paths and one service-owned source file after a redeploy, so a successful service start is not proof that the install modes remained correct.
+
+   ```sh
+   sudo find /opt/sentinel-runtime -xdev ! -user root -print
+   sudo find /opt/sentinel-runtime -xdev -perm /022 -print
+   ```
+
+   Both commands must produce no output.
+
 3. Grant only `sentinel-tetragon-proxy` the narrowest available access to Tetragon's upstream socket. For a group-controlled socket, add its actual group in a proxy service drop-in; for example, use `SupplementaryGroups=tetragon` only if that is the group configured on the host. Do not add `sentinel-runtime` to that group. For remote gRPC, use a CA-verified TLS endpoint and a protected site-specific drop-in for certificate paths.
 4. Start and inspect the service:
 
